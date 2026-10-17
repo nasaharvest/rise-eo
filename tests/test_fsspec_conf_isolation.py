@@ -15,11 +15,11 @@ import os
 
 import fsspec
 
-from fsd.storage import azure as fsd_azure
+from rise_eo.storage import azure as rise_eo_azure
 
 
 def test_a_leaky_caller_configures_azure():
-    fsd_azure.configure_storage("azure")
+    rise_eo_azure.configure_storage("azure")
     assert os.environ["FSSPEC_ABFSS_ANON"] == "false"
 
 

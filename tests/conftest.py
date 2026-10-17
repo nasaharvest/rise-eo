@@ -12,7 +12,7 @@ import pytest
 def clean_fsspec_conf():
     """Snapshot and restore `fsspec.config.conf` and `FSSPEC_ABFSS_ANON` around every test.
 
-    `fsd.storage.azure.configure_storage` writes both process-globally (spec 31 P1), so a
+    `rise_eo.storage.azure.configure_storage` writes both process-globally (spec 31 P1), so a
     test that reaches it leaks into every later test in the session: #150 was that leak
     reaching `tests/test_azure_seam.py`'s noop checks from `tests/test_infer_aml.py`,
     hidden only by alphabetical file order. The per-module copies of this fixture that
