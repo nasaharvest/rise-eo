@@ -185,13 +185,19 @@ def rename(src_path: str, dst_path: str, **storage_options: Any) -> None:
     `os.rename` gives the documented semantics: atomic replace for a file, `EEXIST`/
     `ENOTEMPTY` for a non-empty directory. Cross-device moves have no atomic form at all,
     so those fall back to fsspec's copy-and-delete.
+
+    A file goes through `os.replace`, the same call on POSIX, because on Windows
+    `os.rename` refuses a destination that exists. A directory stays on `os.rename`: on
+    Windows it raises `FileExistsError` for an existing destination, where `os.replace`
+    raises `PermissionError`.
     """
     fs, spath = _fs_and_path(src_path, storage_options)
     _, dpath = _fs_and_path(dst_path, storage_options)
     _ensure_parent(fs, dpath)
     if is_local(src_path) and is_local(dst_path):
         try:
-            os.rename(spath, dpath)
+            move = os.replace if os.path.isfile(spath) else os.rename
+            move(spath, dpath)
             return
         except OSError as exc:
             if exc.errno != errno.EXDEV:
