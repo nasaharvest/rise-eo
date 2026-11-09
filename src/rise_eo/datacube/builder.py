@@ -595,7 +595,7 @@ def _check_missing(shape_gdf, catalog_gdf, startdate, enddate, bands,
 
 def _missing_files_action(catalog_gdf, shape_gdf, startdate, enddate, bands,
                           if_missing_files, max_timedelta_days):
-    if not any(if_missing_files is x for x in _VALID_IF_MISSING):
+    if if_missing_files not in _VALID_IF_MISSING:
         raise ValueError(
             f"Invalid if_missing_files={if_missing_files}. "
             f"Must be one of {_VALID_IF_MISSING}"

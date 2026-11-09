@@ -532,6 +532,23 @@ def test_missing_files_raises_on_incomplete_area():
         )
 
 
+def test_missing_files_accepts_a_value_built_at_runtime():
+    """#143: a valid string that is not interned, as from argv or JSON, must pass validation
+    and reach the coverage check, not be rejected as an invalid option."""
+    tile = gpd.GeoDataFrame(
+        [{"band": "B04", "timestamp": pd.Timestamp("2018-06-01", tz="UTC"),
+          "geometry": box(0, 0, 1, 1)}], crs="EPSG:32633",
+    )
+    shape = gpd.GeoDataFrame({"geometry": [box(0, 0, 4, 4)]}, crs="EPSG:32633")
+    with pytest.raises(ValueError, match="area coverage"):
+        builder._missing_files_action(
+            catalog_gdf=tile, shape_gdf=shape,
+            startdate=datetime.datetime(2018, 5, 30),
+            enddate=datetime.datetime(2018, 6, 2), bands=["B04"],
+            if_missing_files="".join(["raise", "_error"]), max_timedelta_days=5,
+        )
+
+
 def test_build_datacube_clips_low_dn_to_zero_pinned_not_a_bug(tmp_path):
     """spec 34 §1f `[G1]` — PINNED INTENDED BEHAVIOR, NOT A BUG. DO NOT "FIX".
 
