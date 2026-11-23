@@ -11,7 +11,9 @@ issue: "#214"
 changes direction. A1:
 - adds ADR 0035 (supersedes ADR 0029 in part) and ADR 0036 (supersedes ADR 0010 in part);
 - D1: the period is named as in D7, and `"month"` needs the calendar mosaic scheme;
-- D2: states the flatten skip identity per window, and drops the `mosaic_days` comparison;
+- D2: states the flatten skip identity per window, and drops the `mosaic_days` comparison. The
+  T check is a preflight check, made before any download. Corrects the claim that training checks
+  T against the adapter: it does not, by design;
 - D4: corrects the length-1 rule;
 - D5: the join also checks CRS and transform, and defines `grid_from` and the fused dtype;
 - D7: defines the `SHORT_NAME` fallback;
@@ -72,8 +74,17 @@ No other strings are accepted. Weeks, dekads and seasons wait for a model that n
 - Passing scalar dates when those columns exist raises (which one wins would be a guess). An empty
   or unparsable date in any row raises, naming the ids.
 - **Every polygon must give the same T** for the given `mosaic_days`, or the call raises before any
-  work, listing the ids for each T found. With an `adapter`, that T must also equal
-  `adapter.n_timestamps` (the existing check).
+  work, listing the ids for each T found. (A1) **This is a preflight check.** With calendar windows,
+  T and every window's start date follow from `startdate`, `enddate` and `mosaic_days` alone
+  (`compute_n_timestamps`, extended by D1). So the check runs on the date columns as soon as the call
+  starts: before the download leg, before any cube is built, with no catalog read. `flatten`'s check
+  (below) stays as a backstop for cubes built some other way.
+- (A1) What preflight cannot know is whether a window has imagery. An empty month becomes an
+  all-nodata slice, so T is unchanged and the check still holds.
+- (A1) With an `adapter`, `create_training_data` does **not** compare T with
+  `adapter.n_timestamps`. It deliberately never has (`api.py`): training data comes before the
+  model, so the adapter fits whatever T the caller picks. `run_inference` keeps its existing
+  preflight `T == n_timestamps` check, and D9 adds the training lineage to compare against.
 - The download leg runs one `download` per distinct window, each with that window's polygons as ROI.
 - The build leg already writes `startdate`/`enddate` per `input.csv` row, and each window has its own
   path segment, so it needs no change beyond being called once per distinct window.
@@ -161,7 +172,9 @@ When `inputs` has more than one entry, each per-polygon or per-cell task builds 
    moves whenever the reference cube's parameters change. The fused cube's metadata and
    `params.json` list each component's collection, path and provenance.
 6. (A1) A fused build needs `mosaic_scheme="calendar"` on every input, or preflight raises: only
-   calendar windows give two collections the same `timestamps` axis.
+   calendar windows give two collections the same `timestamps` axis. All inputs share one window and
+   one `mosaic_days`, so preflight knows their common window starts before any download. The join's
+   timestamp check (step 4) is a backstop, not the first place a mismatch is found.
 
 `flatten` and `feature_sequence` work on the fused cube unchanged: it is an ordinary
 `datacube.npy` + `metadata.pickle.npy`. With D1 and calendar windows on both inputs, the two
@@ -359,7 +372,9 @@ Tests (synthetic, in `tests/`):
   granules is an all-nodata slice.
 - **AC2:** two polygons with windows in 2018 and 2019 give one training set with T = 12 each and the
   right `window_starts.npy`. A full-year polygon plus a six-month polygon raises, naming both ids
-  under their T. Scalar dates plus date columns raises.
+  under their T. Scalar dates plus date columns raises. (A1) The T mismatch raises with
+  `download=True` before the download function is called, and with an empty catalog, which shows it
+  needs no catalog read and no download.
 - **AC3:** a catalog with both orbit states raises with no filter and with one value, builds with
   both values listed, and the two selections land at different paths. (A1) This is checked through
   the per-cube task the runners call (`workflows.task.run_task`), not only `build_datacube`, so the
