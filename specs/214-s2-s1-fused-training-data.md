@@ -1,6 +1,6 @@
 ---
 status: current
-summary: A new model takes Sentinel-2 L2A (all bands) and Sentinel-1 RTC (VV, VH) as one input, as 12 calendar-month median composites over one year, on S2's 10 m B08 grid, with each label polygon on its own one-year window. Add calendar-month windows (`mosaic_days="month"`), per-polygon windows in `create_training_data` (every polygon must give the same T), an explicit opt-in to median both S1 orbit states together, a `CollectionInput` so one call can download, build and infer over several collections, and a fused datacube that builds each collection onto the first collection's grid and joins them along the band axis, at training and at inference. Closes #99.
+summary: A new model takes Sentinel-2 L2A (all bands) and Sentinel-1 RTC (VV, VH) as one input, as 12 calendar-month median composites over one year, on S2's 10 m B08 grid, with each label polygon on its own one-year window. Add calendar-month windows (`mosaic_days="month"`), per-polygon windows in `create_training_data` (every polygon must give the same T), an explicit opt-in to median both S1 orbit states together, a `CollectionInput` so one call can download, build and infer over several collections, and a fused datacube that builds each collection onto the first collection's grid and joins them along the band axis, at training and at inference. Cube paths become readable (collection, window, bands) with a short hash kept as the identity. Real runs are on Azure ML only. Closes #99.
 issue: "#214"
 ---
 
@@ -133,11 +133,10 @@ When `inputs` has more than one entry, each per-polygon or per-cell task builds 
 4. **Join** (`datacube.join_cubes`): assert identical `timestamps` labels and height/width, then
    concatenate along the band axis in `inputs` order. The fused cube is `float32`. Each component's
    nodata becomes 0, the fused cube's single nodata (S1 RTC declares −32768).
-5. **Paths.** Component cubes keep their own paths, so a rerun resumes them. A component built onto
-   another collection's grid adds `grid_from=<collection>` to its `params_key`, so it never collides
-   with a standalone cube. The fused cube lives at
-   `{run}/{window}/fused-<key>/{id}/`, where `<key>` digests the ordered component `params_key`s.
-   Its metadata lists each component's collection, path and provenance.
+5. **Paths** follow D7. Component cubes keep their own paths, so a rerun resumes them. A component
+   built onto another collection's grid gets `_on-<collection>` in its path and `grid_from` in its
+   hash, so it never collides with a standalone cube. The fused cube's metadata and `params.json`
+   list each component's collection, path and provenance.
 
 `flatten` and `feature_sequence` work on the fused cube unchanged: it is an ordinary
 `datacube.npy` + `metadata.pickle.npy`. With D1 and calendar windows on both inputs, the two
@@ -149,6 +148,40 @@ When `inputs` has more than one entry, each per-polygon or per-cell task builds 
 build-and-join function as `create_training_data`, so training and inference features cannot
 diverge (ROADMAP F1). Preflight checks that `adapter.required_bands` is a subset of the fused band
 list. The adapter contract does not change: `required_bands` names fused bands (`"B04"`, `"vv"`, …).
+
+### D7 — Readable cube paths: name for people, hash for identity
+
+Today a cube lives at `{run}/<start>_<end>_m<days>_<hash8>/{id}/`, and bands, collection,
+declaration, `properties_filter` and `processing` hide inside the 8-character hash. Every cube
+path, single-collection or fused, becomes:
+
+```
+{run}/{collection}/{start}_{end}_m{mosaic}/{bands}_{hash8}/{id}/
+```
+
+| part | single collection | fused (D5) |
+|---|---|---|
+| `{collection}` | `sentinel-2-l2a` | `sentinel-2-l2a__sentinel-1-rtc` |
+| window | `20180101_20190101_mmonth` | same |
+| `{bands}` | `B01-B02-B03-B04-B05-B06-B07-B08-B8A-B09-B11-B12-SCL` | `B01-…-SCL__vv-vh` |
+| S1 component on S2's grid | `sentinel-1-rtc/…/vv-vh_on-sentinel-2-l2a_<hash8>/` | — |
+
+- Bands appear in request order, joined by `-`. Collections are joined by `__`. Only
+  `[A-Za-z0-9._-]` may appear in a readable part; a band or collection name with any other character
+  raises. These characters need no escaping in a blob URL or on Windows.
+- **`{hash8}` stays the identity.** It digests every parameter, readable or not (bands, collection,
+  declaration digest, `properties_filter`, `processing`, `grid_from`). The readable parts are for
+  people; the hash alone keeps two different requests from sharing a path.
+- **`params.json`** sits in each `{bands}_{hash8}/` folder and writes out every parameter in plain
+  form, including the ones only the hash carries (`properties_filter`, `processing`, the
+  declaration) and, for a fused cube, its components' paths.
+- The run's membership never enters the path: adding a polygon or cell adds one `{id}/` folder and
+  moves nothing else.
+- On Windows, a local cube path longer than 259 characters raises at preflight, naming the path and
+  the `LongPathsEnabled` setting. Without that check, the failure would surface later as a confusing
+  file-not-found error.
+- **This moves every existing cube path once.** Cubes built before it are rebuilt on the next run.
+  There is no shim (repo rule).
 
 ## Prior art
 
@@ -178,6 +211,14 @@ list. The adapter contract does not change: `required_bands` names fused bands (
   the same grid and period (`sits_regularize(..., period = "P16D", res = 40)`), then
   `sits_merge(cube_s2_reg, cube_s1_reg)`. Resampling *to a real reference image* (B08) rather than an
   abstract grid is the repo's existing rule.
+- **D7:** no single standard names cached artifacts. The closest established pattern is the Nix
+  store path, whose base name pairs "a 20-byte digest for identification" with "a symbolic name for
+  people to read" (`/nix/store/q06x…-firefox-33.1`). D7 copies that split, with the readable part
+  first so paths sort by collection and window. Hydra's per-run `.hydra/config.yaml` ("a dump of the
+  user specified configuration") is the precedent for `params.json`. Hive-style `key=value` folders
+  (`/year=2009/month=11/`, the layout Apache Arrow reads as partitions) were rejected: no query engine
+  reads these paths, and the keys would roughly double their length against Windows' 260-character
+  `MAX_PATH`.
 
 ## How to verify
 
@@ -199,15 +240,28 @@ Tests (synthetic, in `tests/`):
 - **AC6:** for one cell geometry, the training path and the inference path produce byte-identical
   fused cubes.
 
-Real run (gate 4), a run-book for P5:
+- **AC9 (D7):** the path of a fused cube reads
+  `sentinel-2-l2a__sentinel-1-rtc/20180101_20190101_mmonth/B01-…-SCL__vv-vh_<hash8>/<id>/`. Two
+  requests that differ only in `properties_filter` share the readable part and get different
+  hashes. `params.json` round-trips every parameter. A band name containing `/` raises. On
+  Windows, a 300-character local path raises at preflight.
 
-- **AC7:** `s2grid=4772924`, 2018-06-01 → 2018-07-01, `mosaic_days="month"` (T = 1). S2 with all
-  bands and S1 with `vv`/`vh` and both orbit states, built from the `tests/outputs/p59_p2/` archive
-  after downloading the missing S2 bands for that month. Asserts: shape `(1, H, W, 14)` (12 S2
-  bands, since SCL is dropped after masking, plus `vv` and `vh`), `float32`, nodata 0. Then in QGIS, the user checks that field edges in `vv` line up with the edges
-  in B08.
-- **AC8:** a full-year, 12-month fused training set on a small `AT_2018_TRAIN` subset on Azure ML.
-  This is the first run the model can train on (see Risks for its size).
+Real runs (gate 4) run **on Azure ML only**, in one P5 run-book. The archive is on blob, and the
+downloads and builds run as AML jobs (`runner="aml"`). Only the flattened arrays and one fused cube
+(tens of MB) land on the laptop. No S1 scene is ever downloaded locally.
+
+- **AC7:** `s2grid=4772924`, 2018-06-01 → 2018-07-01, `mosaic_days="month"` (T = 1).
+  `download(inputs=[s2, s1])` into a blob archive: S2 with all bands plus SCL, S1 with `vv`/`vh` and
+  both orbit states. Then `create_training_data(inputs=[s2, s1], runner="aml")` over the
+  `AT_2018_TRAIN` fields inside that cell. Asserts: one fused cube's shape is `(1, H, W, 14)` (12 S2
+  bands, since SCL is dropped after masking, plus `vv` and `vh`), its dtype is `float32` and its
+  nodata is 0, and the count of valid S1 pixels equal to 0.0 is printed. The run-book writes that
+  cube's `B08` and `vv` as GeoTIFFs, and in QGIS the user checks that field edges in `vv` line up
+  with the edges in `B08`.
+- **AC8:** the same run-book, full year: 2018-01-01 → 2019-01-01, T = 12, on the same fields. This
+  is the first training set the model can train on. It also runs `run_inference(inputs=[s2, s1])`
+  over the cell with a stub adapter and asserts that the inference cube for a training field's
+  pixels matches the training cube (D6).
 
 ## Out of scope
 
@@ -225,10 +279,10 @@ One PR per phase. P1–P3 do not depend on each other. P5 needs P4.
 | Phase | Decisions | Size |
 |---|---|---|
 | P1 | D3 orbit opt-in | ~1 h |
-| P2 | D1 monthly windows | ~half a day |
+| P2 | D1 monthly windows, D7 readable cube paths | ~1 day |
 | P3 | D2 per-polygon windows | half a day to a day |
 | P4 | D4 `CollectionInput`, multi-collection download | ~half a day |
-| P5 | D5 + D6 fused cube, training and inference; AC7 run-book | 1–2 days |
+| P5 | D5 + D6 fused cube, training and inference; AC7–AC8 run-book on Azure ML | 1–2 days |
 
 Each implementation PR updates `README.md`, `ARCHITECTURE.md`, `CONTEXT.md`, `ROADMAP.md` and
 `AGENTS.md`'s "downloads Sentinel-2 L2A imagery" line, and P1 adds an amendment note to spec 58 D9.
@@ -236,9 +290,9 @@ Each implementation PR updates `README.md`, `ARCHITECTURE.md`, `CONTEXT.md`, `RO
 ## Risks
 
 - **S1 download size.** Measured 2026-09-12 over one grid cell, April–September 2018, both orbits:
-  387.7 GB (~3.7 GB per scene). A year is roughly twice that per location. This works on Azure ML
-  (blob storage, in-region transfer). It does not fit on a laptop. Windowed reads would cut it to the
-  bytes the cell needs, but are out of scope.
+  387.7 GB (~3.7 GB per scene). A year is roughly twice that per location. That is why every real
+  run for this spec is on Azure ML (blob storage, in-region transfer), and why no run-book downloads
+  S1 to a laptop. Windowed reads would cut it to the bytes the cell needs, but are out of scope.
 - **Mixed orbit geometry (D3).** Field-level backscatter differs by look direction, so a model
   trained on mixed medians must also be served mixed medians. D6 makes that automatic; nothing
   checks it if a user changes `properties_filter` between training and inference.
@@ -271,6 +325,16 @@ Each implementation PR updates `README.md`, `ARCHITECTURE.md`, `CONTEXT.md`, `RO
 - STAC API item search (`collections` as a list, OR-matched), as described in NASA CMR's STAC OpenAPI
   docs and Element 84's Earth Search docs (D4).
 - Spec 58 D9, D11, D16 and its S1 download measurement (Problem 3, 5; Risks).
+- Nix manual 2.36, "Store Path" (`nix.dev/manual/nix/2.36/store/store-path`): a base name is a
+  digest "for identification" plus a name "for people to read" (D7).
+- Hydra docs, "Output/Working directory" (`hydra.cc/docs/tutorials/basic/running_your_app/working_directory/`):
+  each run's `.hydra/config.yaml` snapshot (D7's `params.json`).
+- Apache Arrow, "Tabular Datasets" (`arrow.apache.org/docs/python/dataset.html`): Hive-style
+  `/key=value/` partition folders, the rejected alternative (D7). Taken from a summary of the page.
+- Microsoft, "Maximum Path Length Limitation": `MAX_PATH` is 260 characters unless long paths are
+  enabled (D7's Windows check). Microsoft, "Naming and Referencing Containers, Blobs, and Metadata":
+  blob names up to 1,024 characters, and reserved URL characters must be escaped (D7's character
+  set).
 
 Searches run for this spec: openEO resample/merge and monthly aggregation; combining S1 ascending and
 descending in monthly composites for crop classification; STAC multi-collection item search;
