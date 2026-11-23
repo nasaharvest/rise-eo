@@ -31,7 +31,7 @@ from rasterio.crs import CRS
 from rise_eo import config
 from rise_eo.catalog import declaration as declaration_module
 from rise_eo.catalog import processing as processing_module
-from rise_eo.catalog.catalog import filter_by_properties
+from rise_eo.catalog.catalog import filter_by_properties, properties_filter_values
 from rise_eo.catalog.declaration import (
     MASK_TYPE_CATEGORICAL_CLASSES,
     S2_L2A_DECLARATION,
@@ -125,6 +125,7 @@ def _resolve_build_declaration(
 def _enforce_mosaic_partition(
     catalog_subset: gpd.GeoDataFrame, shape_gdf: gpd.GeoDataFrame,
     declared: CollectionDeclaration,
+    properties_filter: Mapping[str, str | Sequence[str]] | None = None,
 ) -> None:
     """A build whose rows span more than one value of `declared.mosaic_partition`
     raises, enumerating what is available -- e.g. mixing ascending and descending
@@ -135,10 +136,14 @@ def _enforce_mosaic_partition(
     `catalog_subset` carries no rows/`properties` to check (an upstream filter already
     reduced this build to nothing, a separate failure mode).
 
+    A partitioned key that `properties_filter` lists with more than one value is
+    exempt: the caller named the values to mix on purpose (spec 214 D3). A key that is
+    absent from the filter, or listed with one value, is checked as before.
+
     `partition_policy="auto"` is not implemented and raises `NotImplementedError`
     rather than silently picking an orbit.
 
-    Spec: 58 D9.
+    Spec: 58 D9, 214 D3.
     """
     if not declared.mosaic_partition:
         return
@@ -161,7 +166,13 @@ def _enforce_mosaic_partition(
         row["id"]: (json.loads(row["properties"]) if row["properties"] else {})
         for _, row in by_id.iterrows()
     }
-    enforced_keys = list(declared.mosaic_partition)
+    mixed_on_purpose = {
+        k for k, v in (properties_filter or {}).items()
+        if len(properties_filter_values(v)) > 1
+    }
+    enforced_keys = [k for k in declared.mosaic_partition if k not in mixed_on_purpose]
+    if not enforced_keys:
+        return
     distinct = {tuple(props.get(k) for k in enforced_keys) for props in parsed.values()}
     if len(distinct) <= 1:
         return
@@ -317,7 +328,10 @@ def build_datacube(
     (`_enforce_mosaic_partition`): rows spanning more than one value of a partitioned
     property (e.g. Sentinel-1's `sat:orbit_state`) raise, enumerating the available
     combinations -- the error is the discovery mechanism. `properties_filter` narrows
-    to one; it is applied upstream (`workflows.create_datacube.setup`) and again here,
+    to one, or, listing several values of the partitioned key
+    (`{"sat:orbit_state": ["ascending", "descending"]}`), opts in to mixing them.
+    Ascending and descending passes view a field from different sides and incidence
+    angles, so their median mixes two geometries; use it on purpose. It is applied upstream (`workflows.create_datacube.setup`) and again here,
     idempotent when the rows arrived already filtered. A no-op for a declaration with
     `mosaic_partition=()` (e.g. S2 L2A).
 
@@ -360,7 +374,7 @@ def build_datacube(
             f"build_datacube: processing={processing!r} left no rows to build from -- no "
             "acquisition has a processing that satisfies it."
         )
-    _enforce_mosaic_partition(catalog_subset, shape_gdf, declared)
+    _enforce_mosaic_partition(catalog_subset, shape_gdf, declared, properties_filter)
     if declared.native_grid:
         raise NotImplementedError(
             "build_datacube: a native single-grid source (declaration.native_grid="
