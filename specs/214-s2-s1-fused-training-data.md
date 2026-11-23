@@ -6,7 +6,7 @@ issue: "#214"
 
 # Spec 214 — fused Sentinel-2 + Sentinel-1 datacubes, monthly windows, per-polygon dates
 
-**Status:** DRAFT, waiting for the user's sign-off.
+**Status:** **SIGNED OFF (user, 2026-11-23).**
 
 ## Problem
 
