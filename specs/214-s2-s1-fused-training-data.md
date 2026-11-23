@@ -234,6 +234,28 @@ Its shape follows ISO 19115's lineage model, sources plus ordered process steps:
 - `lineage.json` only describes. The skip-or-redo decision stays with `_flatten_stamp.json`, which
   records identity, not description.
 
+**Enough to recreate the data later.** A later feature (out of scope) should be able to rebuild a
+deleted training set or inference output from `lineage.json` alone, provided the provider still
+serves the granules. So the file also holds:
+
+- **`lineage_version`** (starting at `1`), so a future reader knows which fields to expect. Readers
+  keep a list of the versions they support (repo rule).
+- **`request`**: the verb and every argument it was called with, as JSON, including the
+  `CollectionInput`s and the per-polygon date columns. Two exceptions: credentials are never
+  written, and `runner_kwargs` is reduced to the runner's name, because it holds private resource
+  identifiers. The output location is re-supplied on replay.
+- **The geometry itself**: the label polygons or the ROI are copied next to `lineage.json` as
+  `geometry.geojson`, with their sha256 recorded. A path alone can't recover a deleted or edited file.
+  A 900-field training set's geometry is a few MB.
+- **Code**: rise-eo's version and, for a git install, the commit and whether the tree had
+  uncommitted changes. For each feature function, its `module.qualname` *and* a sha256 of its
+  source, so an edited body shows. For inference, the bundle digest.
+- **Libraries**: versions of Python, numpy, pandas, geopandas, rasterio, GDAL, pyproj, numba and
+  fsspec.
+- **Determinism caveat**: where MGRS tiles overlap, the pixel kept depends on download order
+  (#203), so a rebuild can differ there until #203 is fixed. `lineage.json` lists the overlapping
+  tiles used, so a reader knows which pixels that affects.
+
 ### D9 — The model bundle carries its training lineage
 
 `save_bundle` gains `training_data=` (a `TrainingData` handle or its `export_folderpath`). It copies
@@ -323,7 +345,11 @@ Tests (synthetic, in `tests/`):
   order, download, mask, resample, mosaic, fuse, flatten and features. Its `granule_ids` equal the
   catalog rows the cubes used, and its `statement` names both collections and T. An inference run
   writes `lineage.json` with a `predict` step and the model digest. Its STAC Collection carries
-  `processing:software["rise-eo"]` and a `metadata` asset pointing to `lineage.json`.
+  `processing:software["rise-eo"]` and a `metadata` asset pointing to `lineage.json`. Its
+  `request`, re-run with only the output folder changed, gives byte-identical arrays on a
+  single-MGRS-tile fixture. It contains no credential, no `runner_kwargs` value and no personal
+  path. `geometry.geojson` matches its recorded sha256. Editing a feature function's body changes
+  its recorded source hash.
 - **AC11 (D9):** a bundle saved with `training_data=` holds the training `lineage.json`. Inference
   with the same inputs passes. Inference with `properties_filter={"sat:orbit_state": "descending"}`
   against a both-orbits training set raises, naming `properties_filter` and both values. A bundle
@@ -350,6 +376,8 @@ downloads and builds run as AML jobs (`runner="aml"`). Only the flattened arrays
 ## Out of scope
 
 - **Windowed S1 reads.** S1 still downloads whole ~250 km scenes (see Risks). File as an issue.
+- **Recreating data from `lineage.json`** (`rise_eo.recreate(lineage_path, output=…)`). D8 records
+  everything it needs; the verb itself is a later feature, #216.
 - An adapter declaring its own `inputs`. D9's training lineage covers the check this would serve.
 - A catalog *across* training sets (a STAC Collection of every training set an archive holds).
   `lineage.json` is per training set. File as an issue if wanted.
