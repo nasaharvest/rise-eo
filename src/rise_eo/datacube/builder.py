@@ -31,7 +31,7 @@ from rasterio.crs import CRS
 from rise_eo import config
 from rise_eo.catalog import declaration as declaration_module
 from rise_eo.catalog import processing as processing_module
-from rise_eo.catalog.catalog import filter_by_properties, properties_filter_values
+from rise_eo.catalog.catalog import filter_by_properties, mixed_filter_keys
 from rise_eo.catalog.declaration import (
     MASK_TYPE_CATEGORICAL_CLASSES,
     S2_L2A_DECLARATION,
@@ -166,10 +166,7 @@ def _enforce_mosaic_partition(
         row["id"]: (json.loads(row["properties"]) if row["properties"] else {})
         for _, row in by_id.iterrows()
     }
-    mixed_on_purpose = {
-        k for k, v in (properties_filter or {}).items()
-        if len(properties_filter_values(v)) > 1
-    }
+    mixed_on_purpose = mixed_filter_keys(properties_filter)
     enforced_keys = [k for k in declared.mosaic_partition if k not in mixed_on_purpose]
     if not enforced_keys:
         return

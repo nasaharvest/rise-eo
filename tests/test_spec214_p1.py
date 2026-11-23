@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import pathlib
 
 import geopandas as gpd
 import pandas as pd
@@ -82,3 +83,89 @@ def test_both_orbits_land_at_a_different_path_than_one():
                    {"sat:orbit_state": "descending"}, BOTH)
     }
     assert len(segs) == 4
+
+
+def _s1_tile_catalog(path, tmp_path):
+    """A tile-row S1 catalog (the shape `setup` reads) with one ascending and one
+    descending acquisition, real 4x4 tiles on disk."""
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+    from shapely.geometry import box
+
+    from rise_eo.catalog import declaration as declaration_module
+    from rise_eo.storage import fs
+
+    crs = "EPSG:32633"
+    tile = gpd.GeoSeries([box(500000, 4999960, 500040, 5000000)], crs=crs).to_crs("EPSG:4326")
+    rows = []
+    for i, (orbit, ts) in enumerate([("ascending", "2018-06-02"), ("descending", "2018-06-04")]):
+        d = tmp_path / f"s1_{i}"
+        d.mkdir()
+        with rasterio.open(d / "vv.tif", "w", driver="GTiff", height=4, width=4, count=1,
+                           dtype="float32", crs=crs,
+                           transform=from_origin(500000, 5000000, 10, 10), nodata=0) as dst:
+            dst.write(np.full((1, 4, 4), 0.1 + i, dtype="float32"))
+        rows.append({
+            "id": f"s1_{i}", "acquisition_key": f"s1_{i}", "processing_version": None,
+            "processing_datetime": None, "source": "mpc", "satellite": "sentinel-1-rtc",
+            "timestamp": pd.Timestamp(ts, tz="UTC"), "s3url": f"s3://x{i}",
+            "local_folderpath": str(d), "files": "vv.tif", "cloud_cover": 0.0, "offset": 0,
+            "nodata": 0, "area_contribution": 100.0, "geometry": tile.iloc[0],
+            "properties": json.dumps({"sat:orbit_state": orbit}),
+        })
+    gdf = gpd.GeoDataFrame(rows, crs="EPSG:4326")
+    declaration_module.to_attrs(gdf, _collections.get("sentinel-1-rtc"))
+    fs.write_parquet(str(path), gdf)
+    shape = tmp_path / "shape.geojson"
+    gpd.GeoDataFrame({"id": ["c1"], "label": [0], "geometry": [tile.iloc[0]]},
+                     crs="EPSG:4326").to_file(str(shape), driver="GeoJSON")
+    return shape
+
+
+def _setup_then_run_task(tmp_path, properties_filter):
+    from rise_eo.workflows import task
+
+    cat = tmp_path / "catalog.parquet"
+    shape = _s1_tile_catalog(cat, tmp_path)
+    csv = tmp_path / "run" / "input.csv"
+    start, end = datetime.datetime(2018, 6, 1), datetime.datetime(2018, 6, 21)
+    create_datacube.setup(
+        catalog_filepath=str(cat), timestamp_col="timestamp", shapefilepath=str(shape),
+        id_col="id", run_folderpath=str(tmp_path / "run"), startdate=start, enddate=end,
+        bands=["vv"], mosaic_days=20, csv_filepath=str(csv), label_col="label",
+        collection="sentinel-1-rtc", properties_filter=properties_filter,
+    )
+    row = pd.read_csv(csv).iloc[0]
+    task.run_task(
+        str(row["shapefilepath"]), str(row["catalog_filepath"]), start, end,
+        str(row["export_folderpath"]), bands=["vv"], mosaic_days=20,
+        declaration_filepath=str(row["declaration_filepath"]), if_missing_files="warn",
+    )
+    return row
+
+
+def test_run_task_builds_both_orbits_when_both_listed(tmp_path):
+    row = _setup_then_run_task(tmp_path, BOTH)
+    assert (pathlib.Path(row["export_folderpath"]) / "datacube.npy").exists()
+
+
+def test_run_task_with_no_filter_still_raises(tmp_path):
+    with pytest.raises(ValueError, match="rows span multiple values"):
+        _setup_then_run_task(tmp_path, None)
+
+
+def test_run_task_with_one_value_builds_that_orbit_only(tmp_path):
+    row = _setup_then_run_task(tmp_path, {"sat:orbit_state": "ascending"})
+    assert int(row["images_count"]) == 1
+
+
+def test_path_keeps_the_original_declaration_digest(tmp_path):
+    """The control file drops the mixed key, but the path still names the original."""
+    row = _setup_then_run_task(tmp_path, BOTH)
+    decl = _collections.get("sentinel-1-rtc")
+    seg = create_datacube.window_folder_segment(
+        datetime.datetime(2018, 6, 1), datetime.datetime(2018, 6, 21), 20, bands=["vv"],
+        mosaic_scheme=config.MOSAIC_SCHEME, collection="sentinel-1-rtc", declaration=decl,
+        properties_filter=BOTH)
+    assert seg in str(row["export_folderpath"])
