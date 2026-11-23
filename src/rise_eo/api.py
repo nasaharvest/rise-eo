@@ -466,8 +466,11 @@ def download(
     `{"sat:orbit_state": "descending"}`, **before** `max_tiles` is checked. A download is a
     whole-asset byte copy -- a ~5 km ROI still fetches entire ~250 km Sentinel-1 scenes --
     and a build can only ever use ONE value of a partitioned property, so fetching the others
-    is pure waste. `source='cdse'` does not implement it and says so at preflight rather than
-    ignoring it.
+    is pure waste -- unless you list both orbit states on purpose,
+    `{"sat:orbit_state": ["ascending", "descending"]}`, to median them together (ascending and
+    descending passes view a field from different sides and incidence angles, so that median
+    mixes two geometries, and it doubles the download). `source='cdse'` does not implement it
+    and says so at preflight rather than ignoring it.
 
     `max_concurrent` is how many band files transfer at once (`sources.mpc.download`'s
     `max_concurrent`, `sources.cdse.download`'s `max_concurrent_s3`). `None` keeps each
@@ -637,8 +640,11 @@ def create_training_data(
 
     `properties_filter` narrows the catalog to rows matching every given STAC property
     (e.g. `{"sat:orbit_state": "descending"}`) before the build -- required for
-    `collection="sentinel-1-rtc"`, whose ascending/descending passes must never be medianed
-    together (a build spanning both raises, enumerating what is available). A key no row in
+    `collection="sentinel-1-rtc"`, whose ascending/descending passes are not medianed
+    together by default (a build spanning both raises, enumerating what is available).
+    Listing both, `{"sat:orbit_state": ["ascending", "descending"]}`, opts in to the mixed
+    median; the two passes view a field from different sides and incidence angles, so the
+    median mixes two geometries. A key no row in
     the catalog carries at all raises rather than silently filtering to zero rows. Omitting
     it (the default) is a no-op for a collection with no `mosaic_partition` (e.g. S2 L2A).
 
@@ -1655,6 +1661,10 @@ def run_inference(
     ``abfss://`` root and dispatches the per-cell build+infer task onto an Azure ML cluster
     instead (`runner_kwargs` carries `cluster=`/`environment=`/`root=`/`identity_client_id=`,
     see `workflows.runners.run_aml_inference`).
+
+    `properties_filter` narrows the catalog as in `create_training_data`; for
+    `sentinel-1-rtc` list one orbit state, or both to opt in to the mixed median (two
+    viewing geometries in one median). It must match what the model was trained on.
     """
     # Non-local storage is accepted for ROI mode + runner="aml" only; the pre-built-cubes
     # path and local ROI mode stay local.

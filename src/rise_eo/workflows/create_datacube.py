@@ -267,7 +267,9 @@ def setup(
 
     `properties_filter` narrows the catalog to rows matching every given STAC property BEFORE
     the per-shape slice. A key no row carries raises (`catalog.filter_by_properties`), naming
-    the keys it does carry, rather than silently slicing to zero rows. The canonicalized
+    the keys it does carry, rather than silently slicing to zero rows. Listing several values of
+    a partitioned key (both `sat:orbit_state`s) opts in to mixing them in one median, at the
+    cost of two viewing geometries in it. The canonicalized
     selection is folded into `window_segment` (via `params_key`) and recorded on every
     `input.csv` row, so a differently-filtered re-run never collides on content identity.
 
