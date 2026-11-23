@@ -11,6 +11,10 @@ the grilling session. P1 implemented + merged 2026-09-05.
 (MPC dropped the `sentinel-1-rtc` key requirement in 2024; verified anonymously against the live
 endpoints), **AC14 is replaced**, D9 gains its build-time parameter (`properties_filter`), and D17
 gains the declaration table. D1-D8, D11-D16, D18 and AC1-AC10 are untouched by this amendment.
+**AMENDED by spec 214 (SIGNED OFF 2026-11-23):** D9 gains an explicit opt-in. A partition key that
+`properties_filter` lists with more than one value (e.g. `{"sat:orbit_state": ["ascending",
+"descending"]}`) is exempt from the single-value check. With no value or one value, D9 is
+unchanged. D16 (one cube, one collection) is superseded by spec 214 D5, the fused cube.
 · **Opened:** 2026-09-04
 **Advances:** [#11](https://github.com/nikhilsrajan/fsd/issues/11) (additional sources + the `Source`
 contract), [#21](https://github.com/nikhilsrajan/fsd/issues/21) (source-capability model).
