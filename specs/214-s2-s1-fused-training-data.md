@@ -1,16 +1,17 @@
 ---
 status: current
-summary: A new model takes Sentinel-2 L2A (all bands) and Sentinel-1 RTC (VV, VH) as one input, as 12 calendar-month median composites over one year, on S2's 10 m B08 grid, with each label polygon on its own one-year window. Add calendar-month windows (`mosaic_days="month"`), per-polygon windows in `create_training_data` (every polygon must give the same T), an explicit opt-in to median both S1 orbit states together, a `CollectionInput` so one call can download, build and infer over several collections, and a fused datacube that builds each collection onto the first collection's grid and joins them along the band axis, at training and at inference. Cube paths become short and readable (collection codes, window, ISO 8601 period), with a hash kept as the identity and the full parameters in `params.json`. Every training set and inference output gets a `lineage.json` (its sources and process steps), and a model bundle carries its training lineage so inference refuses inputs the model was not trained on. Real runs are on Azure ML only. Closes #99.
+summary: A new model takes Sentinel-2 L2A (all bands) and Sentinel-1 RTC (VV, VH) as one input, as 12 calendar-month median composites over one year, on S2's 10 m B08 grid, with each label polygon on its own one-year window. Add calendar-month windows (`mosaic_days="month"`), per-polygon windows in `create_training_data` (every polygon must give the same T), an explicit opt-in to median both S1 orbit states together, a `CollectionInput` so one call can download, build and infer over several collections, and a fused datacube that builds each collection onto the first collection's grid and joins them along the band axis, at training and at inference. Cube paths become short and readable (collection codes, window, ISO 8601 period), with a hash kept as the identity and the full parameters in `params.json`. Every training set and inference output gets a `lineage.json` (its sources and process steps), and a model bundle carries its training lineage so inference refuses inputs the model was not trained on. Real runs are on Azure ML only. The legacy `mosaic_scheme="acquisition"` is removed. Closes #99 and #147.
 issue: "#214"
 ---
 
 # Spec 214 — fused Sentinel-2 + Sentinel-1 datacubes, monthly windows, per-polygon dates
 
 **Status:** **SIGNED OFF (user, 2026-11-23).**
-**Amendment A1 (2026-11-23, from the gate-3 review on #215), awaiting the user's sign-off.** No decision
-changes direction. A1:
+**Amendment A1 (2026-11-23, from the gate-3 review on #215), awaiting the user's sign-off.** No signed-off
+decision changes direction. One decision is new: D10, from the maintainer's #147 decision. A1:
 - adds ADR 0035 (supersedes ADR 0029 in part) and ADR 0036 (supersedes ADR 0010 in part);
-- D1: the period is named as in D7, and `"month"` needs the calendar mosaic scheme;
+- D1: the period is named as in D7;
+- adds D10: removes `mosaic_scheme="acquisition"` (#147), in P2;
 - D2: states the flatten skip identity per window, and drops the `mosaic_days` comparison. The
   T check is a preflight check, made before any download. Corrects the claim that training checks
   T against the adapter: it does not, by design;
@@ -61,8 +62,8 @@ Every parameter named `mosaic_days` (`create_training_data`, `run_inference`, `b
 - Each window's label is its month start. An empty month is an all-nodata slice, as an empty
   `int` window is today.
 - (A1) The cube path names the period as D7 does: `P1M` for `"month"`, `P<n>D` for an `int`.
-- (A1) `"month"` needs `mosaic_scheme="calendar"`, the default. With `mosaic_scheme="acquisition"`,
-  whose windows depend on the data, it raises before any work.
+- (A1) Calendar windows are the only kind once D10 removes `mosaic_scheme="acquisition"`, so
+  `"month"` needs no special guard.
 
 No other strings are accepted. Weeks, dekads and seasons wait for a model that needs them.
 
@@ -171,8 +172,8 @@ When `inputs` has more than one entry, each per-polygon or per-cell task builds 
    reference cube's full `params_key`, in its hash. It never collides with a standalone cube, and it
    moves whenever the reference cube's parameters change. The fused cube's metadata and
    `params.json` list each component's collection, path and provenance.
-6. (A1) A fused build needs `mosaic_scheme="calendar"` on every input, or preflight raises: only
-   calendar windows give two collections the same `timestamps` axis. All inputs share one window and
+6. (A1) Only calendar windows remain (D10), and they give two collections the same `timestamps`
+   axis. All inputs share one window and
    one `mosaic_days`, so preflight knows their common window starts before any download. The join's
    timestamp check (step 4) is a backstop, not the first place a mismatch is found.
 
@@ -313,6 +314,19 @@ raises, naming the field and both values. For example, a model trained on both o
 served only `descending` fails before any job starts. A bundle saved without `training_data=` skips
 the check and says so once.
 
+### D10 — (A1) Remove `mosaic_scheme="acquisition"` (#147)
+
+`mosaic_scheme` accepts only `"calendar"`. Passing `"acquisition"` to any verb, runner or task CLI
+raises a `ValueError` that names `"calendar"` and says the legacy scheme was removed. The
+`"acquisition"` branch (`_get_mosaic_ts_index_ranges` and its call in `datacube/ops.py`) goes, and so
+do its tests and the two manual test notes. `LIMITATIONS.md` gets a row. The parameter itself stays,
+so a caller passing `"calendar"` explicitly is unaffected and `params_key` (which includes it) does
+not move.
+
+The maintainer decided this on 2026-10-09 (#145, Q3d). It lands here because the legacy scheme's
+windows depend on the data. With it, neither D1's monthly T nor D5's S2/S1 alignment could be known
+before download. Without it, both are pure functions of the parameters. Closes #147.
+
 ## Prior art
 
 - **D1:** openEO `aggregate_temporal_period` (openeo-processes 1.0.0, 2020-07-31) has
@@ -386,7 +400,7 @@ Tests (synthetic, in `tests/`):
   cube's bands are in `inputs` order, its nodata is 0, and it is `float32` in the array and in its
   metadata. (A1) Mismatched timestamps, CRS or transform raise. The fused cube's path reads
   `s2l2a-s1rtc_20180101-20190101_P1M_<hash8>/<id>/`. Changing the S2 input's bands moves the S1
-  component's path (`grid_from`). A fused build with `mosaic_scheme="acquisition"` raises.
+  component's path (`grid_from`).
 - **AC6:** for one cell geometry, the training path and the inference path produce byte-identical
   fused cubes.
 
@@ -395,8 +409,8 @@ Tests (synthetic, in `tests/`):
   Two requests that differ only in bands or `properties_filter` share the readable part and get
   different hashes. `params.json` round-trips every parameter. Registering a collection with
   `short_name="S2/x"` raises. A collection registered without `short_name` gets the fallback code,
-  and a second collection with the same code raises. `"month"` with `mosaic_scheme="acquisition"`
-  raises.
+  and a second collection with the same code raises. (D10) `mosaic_scheme="acquisition"` raises on
+  every verb and CLI that took it, naming `"calendar"`.
 - **AC10 (D8):** a synthetic fused training run writes `lineage.json`. Its `process_steps` are, in
   order, download, mask, resample, mosaic, fuse, flatten and features. Its `granule_ids` equal the
   catalog rows the cubes used, and its `statement` names both collections and T. An inference run
@@ -450,7 +464,7 @@ lineage records the fuse step.
 | Phase | Decisions | Size |
 |---|---|---|
 | P1 | D3 orbit opt-in | ~1 h |
-| P2 | D1 monthly windows, D7 readable cube paths | ~1 day |
+| P2 | D10 remove `"acquisition"` first, then D1 monthly windows and D7 short cube paths | ~1 day |
 | P3 | D2 per-polygon windows | half a day to a day |
 | P4 | D4 `CollectionInput`, multi-collection download | ~half a day |
 | P5 | D5 + D6 fused cube, training and inference; AC7 run-book on Azure ML | 1–2 days |
