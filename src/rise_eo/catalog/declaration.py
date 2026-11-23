@@ -143,8 +143,10 @@ class CollectionDeclaration:
     `PreflightError` naming the collection rather than silently ignored.
 
     `mosaic_partition` / `partition_policy` — catalog property keys that must hold a
-    SINGLE value within one build, and what to do when they don't (`"raise"`; `"auto"` is
-    declared but raises `NotImplementedError`). Empty tuple = no enforcement.
+    SINGLE value within one build by default, and what to do when they don't (`"raise"`;
+    `"auto"` is declared but raises `NotImplementedError`). A caller opts in to mixing by
+    listing several values of the key in `properties_filter` (ADR 0035). Empty tuple = no
+    enforcement.
 
     Spec: 58.
     """
