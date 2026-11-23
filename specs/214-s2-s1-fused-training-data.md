@@ -1,6 +1,6 @@
 ---
 status: current
-summary: A new model takes Sentinel-2 L2A (all bands) and Sentinel-1 RTC (VV, VH) as one input, as 12 calendar-month median composites over one year, on S2's 10 m B08 grid, with each label polygon on its own one-year window. Add calendar-month windows (`mosaic_days="month"`), per-polygon windows in `create_training_data` (every polygon must give the same T), an explicit opt-in to median both S1 orbit states together, a `CollectionInput` so one call can download, build and infer over several collections, and a fused datacube that builds each collection onto the first collection's grid and joins them along the band axis, at training and at inference. Cube paths become short and readable (collection codes, window, ISO 8601 period), with a hash kept as the identity and the full parameters in `params.json`. Real runs are on Azure ML only. Closes #99.
+summary: A new model takes Sentinel-2 L2A (all bands) and Sentinel-1 RTC (VV, VH) as one input, as 12 calendar-month median composites over one year, on S2's 10 m B08 grid, with each label polygon on its own one-year window. Add calendar-month windows (`mosaic_days="month"`), per-polygon windows in `create_training_data` (every polygon must give the same T), an explicit opt-in to median both S1 orbit states together, a `CollectionInput` so one call can download, build and infer over several collections, and a fused datacube that builds each collection onto the first collection's grid and joins them along the band axis, at training and at inference. Cube paths become short and readable (collection codes, window, ISO 8601 period), with a hash kept as the identity and the full parameters in `params.json`. Every training set and inference output gets a `lineage.json` (its sources and process steps), and a model bundle carries its training lineage so inference refuses inputs the model was not trained on. Real runs are on Azure ML only. Closes #99.
 issue: "#214"
 ---
 
@@ -185,6 +185,66 @@ Today's segment is 30 characters, so the new one adds about a dozen.
 - **This moves every existing cube path once.** Cubes built before it are rebuilt on the next run.
   There is no shim (repo rule).
 
+### D8 — `lineage.json`: what a training set or an inference output went through
+
+Cubes are temporary; the training arrays and the inference COGs are what people keep. Each gets
+one readable JSON file saying where it came from and what was done to it:
+
+- `create_training_data` writes `lineage.json` next to `data.npy`;
+- `run_inference` writes it next to its STAC catalog.
+
+Its shape follows ISO 19115's lineage model, sources plus ordered process steps:
+
+```json
+{
+  "statement": "Training data for 900 polygons of AT_2018_TRAIN.geojson: sentinel-2-l2a (13 bands) and sentinel-1-rtc (vv, vh; both orbit states), monthly median, T=12, fused on the sentinel-2-l2a B08 10 m grid.",
+  "created": "2026-12-01T10:00:00Z",
+  "software": {"rise-eo": "0.4.0", "numpy": "…", "rasterio": "…", "gdal": "…"},
+  "runner": "aml",
+  "sources": {
+    "geometry": {"path": "…", "sha256": "…", "n_features": 900, "id_col": "fid", "label_col": "crop"},
+    "collections": [
+      {"collection": "sentinel-2-l2a", "bands": ["B01", "…"], "properties_filter": null,
+       "processing": "latest", "provider": ["mpc"], "processing_version": ["05.09"],
+       "n_granules": 212, "granule_ids": ["S2B_MSIL2A_…", "…"]},
+      {"collection": "sentinel-1-rtc", "…": "…"}
+    ]
+  },
+  "process_steps": [
+    {"step": "download", "description": "…", "parameters": {"…": "…"}},
+    {"step": "mask", "parameters": {"band": "SCL", "classes": ["…"]}},
+    {"step": "resample", "parameters": {"method": "nearest", "reference": "sentinel-2-l2a B08"}},
+    {"step": "mosaic", "parameters": {"method": "median", "period": "P1M", "windows": "per polygon"}},
+    {"step": "fuse", "parameters": {"order": ["sentinel-2-l2a", "sentinel-1-rtc"], "dtype": "float32", "nodata": 0}},
+    {"step": "flatten", "parameters": {"aggregate": null}},
+    {"step": "features", "parameters": {"feature_sequence": ["module.function", "…"]}}
+  ]
+}
+```
+
+- Every step and parameter is taken from what actually ran: the call's arguments, each
+  collection's declaration and the cubes' provenance (spec 59 D9). Nothing is typed in by hand.
+- `statement` is one generated sentence for people. `granule_ids` lists every granule used,
+  so a training set can be traced to its imagery.
+- An inference `lineage.json` has the same shape. It adds the ROI and grid size to `sources`, the
+  model (registry ref or bundle path, plus the bundle's digest) and, when the bundle has one, the
+  model's **training lineage** (D9), and a `predict` step.
+- The inference STAC Collection and Items get `processing:software` and `processing:lineage` (the
+  statement), and the Collection links to `lineage.json` as an asset with role `metadata`.
+- `lineage.json` only describes. The skip-or-redo decision stays with `_flatten_stamp.json`, which
+  records identity, not description.
+
+### D9 — The model bundle carries its training lineage
+
+`save_bundle` gains `training_data=` (a `TrainingData` handle or its `export_folderpath`). It copies
+that training set's `lineage.json` into the bundle.
+
+At inference, preflight compares the bundle's training lineage with the inference request: the
+collections in order, each one's bands and `properties_filter`, the period and T. A difference
+raises, naming the field and both values. For example, a model trained on both orbit states but
+served only `descending` fails before any job starts. A bundle saved without `training_data=` skips
+the check and says so once.
+
 ## Prior art
 
 - **D1:** openEO `aggregate_temporal_period` (openeo-processes 1.0.0, 2020-07-31) has
@@ -221,6 +281,19 @@ Today's segment is 30 characters, so the new one adds about a dozen.
   durations, as sits writes them (`period = "P16D"`). Hive-style `key=value` folders
   (`/year=2009/month=11/`, the layout Apache Arrow reads as partitions) were rejected: no query engine
   reads these paths, and the keys would make them longer, the opposite of the goal.
+- **D8:** ISO 19115's lineage model, "based on sources which are either used or produced in a
+  series of process steps". Each step records a description, rationale, date and processor
+  (`LI_Lineage` → `statement`, `source`, `processStep`; ESIP wiki, ISO_Lineage, edited 2017). D8
+  keeps its three parts (`statement`, `sources`, `process_steps`) in plain JSON, not ISO's XML
+  encoding. The STAC processing extension (v1.0.0, 2021-03-08) supplies `processing:software`
+  ("name/version … for provenance purposes") and `processing:lineage` ("free text information
+  about the how observations were processed") for the inference STAC. W3C PROV (2013) was rejected
+  as the format: its entity/activity/agent graph answers questions nobody here asks, at the cost of
+  an RDF vocabulary. `granule_ids` per source follows spec 59 D9's provenance, which rise-eo
+  already computes.
+- **D9:** homemade. The closest established practice is a model card's "training data" section
+  (Mitchell et al., 2019), which is prose for people. D9 stores the same fact as data, so inference
+  can compare against it.
 
 ## How to verify
 
@@ -246,6 +319,15 @@ Tests (synthetic, in `tests/`):
   `s2l2a-s1rtc_20180101-20190101_P1M_<hash8>/<id>/`. Two requests that differ only in bands or
   `properties_filter` share the readable part and get different hashes. `params.json` round-trips
   every parameter. Registering a collection with `short_name="S2/x"` raises.
+- **AC10 (D8):** a synthetic fused training run writes `lineage.json`. Its `process_steps` are, in
+  order, download, mask, resample, mosaic, fuse, flatten and features. Its `granule_ids` equal the
+  catalog rows the cubes used, and its `statement` names both collections and T. An inference run
+  writes `lineage.json` with a `predict` step and the model digest. Its STAC Collection carries
+  `processing:software["rise-eo"]` and a `metadata` asset pointing to `lineage.json`.
+- **AC11 (D9):** a bundle saved with `training_data=` holds the training `lineage.json`. Inference
+  with the same inputs passes. Inference with `properties_filter={"sat:orbit_state": "descending"}`
+  against a both-orbits training set raises, naming `properties_filter` and both values. A bundle
+  without training lineage prints one line and runs.
 
 Real runs (gate 4) run **on Azure ML only**, in one P5 run-book. The archive is on blob, and the
 downloads and builds run as AML jobs (`runner="aml"`). Only the flattened arrays and one fused cube
@@ -262,20 +344,23 @@ downloads and builds run as AML jobs (`runner="aml"`). Only the flattened arrays
 - **AC8:** the same run-book, full year: 2018-01-01 → 2019-01-01, T = 12, on the same fields. This
   is the first training set the model can train on. It also runs `run_inference(inputs=[s2, s1])`
   over the cell with a stub adapter and asserts that the inference cube for a training field's
-  pixels matches the training cube (D6).
+  pixels matches the training cube (D6). The run-book prints both `lineage.json` files, and the
+  user reads them.
 
 ## Out of scope
 
 - **Windowed S1 reads.** S1 still downloads whole ~250 km scenes (see Risks). File as an issue.
-- An adapter declaring its own `inputs`, or the bundle recording which inputs it was trained on (a
-  #101-style guard). File as an issue.
+- An adapter declaring its own `inputs`. D9's training lineage covers the check this would serve.
+- A catalog *across* training sets (a STAC Collection of every training set an archive holds).
+  `lineage.json` is per training set. File as an issue if wanted.
 - Fusion with HLS, speckle filtering, dB conversion (a `feature_sequence` step can do that),
   `sat:relative_orbit` selection, and S1 from CDSE.
 - Other calendar periods (week, dekad, season).
 
 ## Phases
 
-One PR per phase. P1–P3 do not depend on each other. P5 needs P4.
+One PR per phase. P1–P3 do not depend on each other. P5 needs P4. P6 needs P5, so that the
+lineage records the fuse step.
 
 | Phase | Decisions | Size |
 |---|---|---|
@@ -283,7 +368,8 @@ One PR per phase. P1–P3 do not depend on each other. P5 needs P4.
 | P2 | D1 monthly windows, D7 readable cube paths | ~1 day |
 | P3 | D2 per-polygon windows | half a day to a day |
 | P4 | D4 `CollectionInput`, multi-collection download | ~half a day |
-| P5 | D5 + D6 fused cube, training and inference; AC7–AC8 run-book on Azure ML | 1–2 days |
+| P5 | D5 + D6 fused cube, training and inference; AC7 run-book on Azure ML | 1–2 days |
+| P6 | D8 `lineage.json`, D9 training lineage in the bundle; AC8 run-book on Azure ML | ~1 day |
 
 Each implementation PR updates `README.md`, `ARCHITECTURE.md`, `CONTEXT.md`, `ROADMAP.md` and
 `AGENTS.md`'s "downloads Sentinel-2 L2A imagery" line, and P1 adds an amendment note to spec 58 D9.
@@ -295,8 +381,9 @@ Each implementation PR updates `README.md`, `ARCHITECTURE.md`, `CONTEXT.md`, `RO
   run for this spec is on Azure ML (blob storage, in-region transfer), and why no run-book downloads
   S1 to a laptop. Windowed reads would cut it to the bytes the cell needs, but are out of scope.
 - **Mixed orbit geometry (D3).** Field-level backscatter differs by look direction, so a model
-  trained on mixed medians must also be served mixed medians. D6 makes that automatic; nothing
-  checks it if a user changes `properties_filter` between training and inference.
+  trained on mixed medians must also be served mixed medians. D6 builds both the same way, and D9
+  refuses an inference request whose `properties_filter` differs from training. A bundle saved
+  without `training_data=` is not checked.
 - **A valid S1 pixel of exactly 0.0 becomes nodata** in the fused cube. Linear gamma naught is not
   physically 0 for valid backscatter, so we expect this to be rare. AC7 counts such pixels in the
   real cube.
@@ -337,6 +424,14 @@ Each implementation PR updates `README.md`, `ARCHITECTURE.md`, `CONTEXT.md`, `RO
   Blobs, and Metadata": reserved URL characters must be escaped, which is why D7's codes are
   `[a-z0-9]` joined by `-` and `_`.
 - sits book (above): `period = "P16D"`, an ISO 8601 duration, the form of D7's period.
+- ESIP wiki, "ISO Lineage" (`wiki.esipfed.org/ISO_Lineage`, edited 2017-09-29): ISO 19115's lineage
+  as sources used or produced in process steps, and a process step's fields (D8).
+- STAC processing extension README and CHANGELOG (`github.com/stac-extensions/processing`):
+  `processing:software` and `processing:lineage` definitions, and v1.0.0 on 2021-03-08 (D8).
+- W3C, "PROV-Overview" (2013-04-30): provenance as "entities, activities, and people involved in
+  producing a piece of data", the rejected alternative (D8).
+- Mitchell et al., "Model Cards for Model Reporting" (FAT* '19; arXiv 1810.03993, 2018-10-05):
+  section 4.6 "Training Data", prose for people, the nearest practice to D9.
 
 Searches run for this spec: openEO resample/merge and monthly aggregation; combining S1 ascending and
 descending in monthly composites for crop classification; STAC multi-collection item search;
