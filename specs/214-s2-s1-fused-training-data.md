@@ -7,6 +7,16 @@ issue: "#214"
 # Spec 214 — fused Sentinel-2 + Sentinel-1 datacubes, monthly windows, per-polygon dates
 
 **Status:** **SIGNED OFF (user, 2026-11-23).**
+**Amendment A1 (2026-11-23, from the gate-3 review on #215), awaiting the user's sign-off.** No decision
+changes direction. A1:
+- adds ADR 0035 (supersedes ADR 0029 in part) and ADR 0036 (supersedes ADR 0010 in part);
+- D1: the period is named as in D7, and `"month"` needs the calendar mosaic scheme;
+- D2: states the flatten skip identity per window, and drops the `mosaic_days` comparison;
+- D4: corrects the length-1 rule;
+- D5: the join also checks CRS and transform, and defines `grid_from` and the fused dtype;
+- D7: defines the `SHORT_NAME` fallback;
+- D8: states how paths are recorded;
+- the ACs now match the phases, and the S2 band count is worded consistently.
 
 ## Problem
 
@@ -48,7 +58,9 @@ Every parameter named `mosaic_days` (`create_training_data`, `run_inference`, `b
   2018-01-01 → 2018-12-31 both give T = 12. The last window stays upper-inclusive, as for `int`.
 - Each window's label is its month start. An empty month is an all-nodata slice, as an empty
   `int` window is today.
-- The cube path's window segment writes `mmonth` where it writes `m<days>` today.
+- (A1) The cube path names the period as D7 does: `P1M` for `"month"`, `P<n>D` for an `int`.
+- (A1) `"month"` needs `mosaic_scheme="calendar"`, the default. With `mosaic_scheme="acquisition"`,
+  whose windows depend on the data, it raises before any work.
 
 No other strings are accepted. Weeks, dekads and seasons wait for a model that needs them.
 
@@ -65,10 +77,16 @@ No other strings are accepted. Weeks, dekads and seasons wait for a model that n
 - The download leg runs one `download` per distinct window, each with that window's polygons as ROI.
 - The build leg already writes `startdate`/`enddate` per `input.csv` row, and each window has its own
   path segment, so it needs no change beyond being called once per distinct window.
-- `flatten` checks that every cube has the same **number** of timestamps and the same `mosaic_days`,
-  not the same timestamp values. It writes **`window_starts.npy`**, one UTC window start per sample,
-  in the order of `ids.npy`. It writes it for scalar windows too, so the output has one shape.
-  `TrainingData` gains `window_starts`.
+- (A1) `flatten` checks that every cube has the same **number** of timestamps and the same bands,
+  not the same timestamp values. `mosaic_days` is one argument for the whole call, so it cannot
+  differ between cubes and is not compared. `flatten` writes **`window_starts.npy`**, one UTC window
+  start per sample, in the order of `ids.npy`. It writes it for scalar windows too, so the output
+  has one shape. `TrainingData` gains `window_starts`. ADR 0036 records the change to ADR 0010.
+- (A1) **Skip identity.** The flatten skip identity (`_flatten_identity_from_request`) and the
+  known-empty manifest are computed once per distinct window, each with its own window segment, and
+  joined. One polygon's window change moves only that polygon's cube.
+- (A1) P3 changes the `AGENTS.md` line "Cubes with the same start, end and `mosaic_days` share the
+  same `timestamps` axis; `flatten` needs that" to say that `flatten` needs the same T.
 
 ### D3 — Opt in to median both S1 orbit states
 
@@ -85,7 +103,7 @@ properties_filter={"sat:orbit_state": ["ascending", "descending"]}
 - The docstrings of every verb that takes `properties_filter` say what this costs. Ascending and
   descending passes view a field from different sides and incidence angles, so their median mixes
   two geometries. CropHarvest, sits and WorldCereal each keep one direction. This amends spec 58 D9,
-  which stays the default.
+  which stays the default. (A1) ADR 0035 records the change to ADR 0029.
 
 ### D4 — `CollectionInput`: several collections in one call
 
@@ -115,7 +133,8 @@ CollectionInput(
   S1 input with `max_cloudcover` fails before the S2 download is paid for.
 - A collection may appear only once in `inputs`, and band names must be unique across inputs.
   Either violation raises.
-- `inputs` of length 1 behaves exactly like the scalar arguments.
+- (A1) With one input, `create_training_data` and `run_inference` build and infer exactly as with
+  the scalar arguments. `download(inputs=...)` always returns the dict, even with one input.
 
 ### D5 — The fused datacube
 
@@ -130,13 +149,19 @@ When `inputs` has more than one entry, each per-polygon or per-cell task builds 
    The S1 cube keeps its own declaration, nodata and (absent) mask.
 3. **Fix the resample test.** `_get_indices_to_resample` also compares the **transform**, so an image
    with the reference's shape but a shifted origin is resampled, not stacked out of place.
-4. **Join** (`datacube.join_cubes`): assert identical `timestamps` labels and height/width, then
-   concatenate along the band axis in `inputs` order. The fused cube is `float32`. Each component's
-   nodata becomes 0, the fused cube's single nodata (S1 RTC declares −32768).
+4. **Join** (`datacube.join_cubes`): (A1) assert identical `timestamps` labels, CRS, transform,
+   height and width, so a stale component on a shifted grid raises instead of joining. Then
+   concatenate along the band axis in `inputs` order. The fused cube is `float32`, in the array and
+   in every dtype field of its metadata (including `geotiff_metadata`, which says `uint16` for an S2
+   cube today). Each component's nodata becomes 0, the fused cube's single nodata (S1 RTC declares
+   −32768).
 5. **Paths** follow D7. Component cubes keep their own paths, so a rerun resumes them. A component
-   built onto another collection's grid gets `-on-<code>` in its path and `grid_from` in its
-   hash, so it never collides with a standalone cube. The fused cube's metadata and `params.json`
-   list each component's collection, path and provenance.
+   built onto another collection's grid gets `-on-<code>` in its path, and (A1) **`grid_from`**, the
+   reference cube's full `params_key`, in its hash. It never collides with a standalone cube, and it
+   moves whenever the reference cube's parameters change. The fused cube's metadata and
+   `params.json` list each component's collection, path and provenance.
+6. (A1) A fused build needs `mosaic_scheme="calendar"` on every input, or preflight raises: only
+   calendar windows give two collections the same `timestamps` axis.
 
 `flatten` and `feature_sequence` work on the fused cube unchanged: it is an ordinary
 `datacube.npy` + `metadata.pickle.npy`. With D1 and calendar windows on both inputs, the two
@@ -168,12 +193,16 @@ path, single-collection or fused, becomes one short segment:
 Today's segment is 30 characters, so the new one adds about a dozen.
 
 - **Collection codes.** Each collection module declares a `SHORT_NAME` next to its declaration
-  (`s2l2a`, `s1rtc`). A caller's registered collection may pass `short_name=` to `register()`, and
-  its collection id is used when it passes none. Fused cubes join codes with `-` in `inputs` order.
+  (`s2l2a`, `s1rtc`). A caller's registered collection may pass `short_name=` to `register()`. (A1)
+  When it passes none, the code is the collection id with every character outside `[a-z0-9]`
+  removed (`sentinel-2-l2a` → `sentinel2l2a`, `hls2-s30` → `hls2s30`). Registering a code that
+  another collection already uses raises, naming both collections. Fused cubes join codes with `-`
+  in `inputs` order.
   A code must match `[a-z0-9]+`, or registration raises.
 - **Dates** use ISO 8601's basic form, `YYYYMMDD`. **The period** is an ISO 8601 duration: `P1M` for
   `mosaic_days="month"`, `P<n>D` for an `int`.
-- **Bands are not in the name.** All 13 S2 bands alone would take 51 characters. Bands are in the
+- **Bands are not in the name.** The 13 S2 band names requested (12 spectral plus SCL) alone would
+  take 51 characters. Bands are in the
   hash, so two band sets never share a path, and `params.json` lists them.
 - **`{hash8}` stays the identity.** It digests every parameter, readable or not (bands, collection,
   declaration digest, `properties_filter`, `processing`, `grid_from`). The readable part is for
@@ -197,7 +226,7 @@ Its shape follows ISO 19115's lineage model, sources plus ordered process steps:
 
 ```json
 {
-  "statement": "Training data for 900 polygons of AT_2018_TRAIN.geojson: sentinel-2-l2a (13 bands) and sentinel-1-rtc (vv, vh; both orbit states), monthly median, T=12, fused on the sentinel-2-l2a B08 10 m grid.",
+  "statement": "Training data for 900 polygons of AT_2018_TRAIN.geojson: sentinel-2-l2a (12 spectral bands, SCL mask) and sentinel-1-rtc (vv, vh; both orbit states), monthly median, T=12, fused on the sentinel-2-l2a B08 10 m grid.",
   "created": "2026-12-01T10:00:00Z",
   "software": {"rise-eo": "0.4.0", "numpy": "…", "rasterio": "…", "gdal": "…"},
   "runner": "aml",
@@ -243,7 +272,11 @@ serves the granules. So the file also holds:
 - **`request`**: the verb and every argument it was called with, as JSON, including the
   `CollectionInput`s and the per-polygon date columns. Two exceptions: credentials are never
   written, and `runner_kwargs` is reduced to the runner's name, because it holds private resource
-  identifiers. The output location is re-supplied on replay.
+  identifiers. The output location is re-supplied on replay. (A1) Paths (the geometry's
+  source, `archive_root`) are recorded as given, blob URL or local path, because a replay on the
+  same machine needs them. A local path can name a user's home folder, so treat `lineage.json` like
+  any output before sharing it. A replay elsewhere uses the `geometry.geojson` copy and a new
+  `archive_root`.
 - **The geometry itself**: the label polygons or the ROI are copied next to `lineage.json` as
   `geometry.geojson`, with their sha256 recorded. A path alone can't recover a deleted or edited file.
   A 900-field training set's geometry is a few MB.
@@ -328,34 +361,43 @@ Tests (synthetic, in `tests/`):
   right `window_starts.npy`. A full-year polygon plus a six-month polygon raises, naming both ids
   under their T. Scalar dates plus date columns raises.
 - **AC3:** a catalog with both orbit states raises with no filter and with one value, builds with
-  both values listed, and the two selections land at different paths.
+  both values listed, and the two selections land at different paths. (A1) This is checked through
+  the per-cube task the runners call (`workflows.task.run_task`), not only `build_datacube`, so the
+  filter is shown to reach the node.
 - **AC4:** `download(inputs=[s2, s1])` writes two catalogs and returns both paths. An S1 input with
   `max_cloudcover` fails at preflight before the S2 download runs. A repeated collection or band name
   raises.
 - **AC5:** an image with the reference's shape and a shifted transform is resampled. The fused
-  cube's bands are in `inputs` order, its nodata is 0, and mismatched timestamps raise.
+  cube's bands are in `inputs` order, its nodata is 0, and it is `float32` in the array and in its
+  metadata. (A1) Mismatched timestamps, CRS or transform raise. The fused cube's path reads
+  `s2l2a-s1rtc_20180101-20190101_P1M_<hash8>/<id>/`. Changing the S2 input's bands moves the S1
+  component's path (`grid_from`). A fused build with `mosaic_scheme="acquisition"` raises.
 - **AC6:** for one cell geometry, the training path and the inference path produce byte-identical
   fused cubes.
 
-- **AC9 (D7):** the path of a fused cube reads
-  `s2l2a-s1rtc_20180101-20190101_P1M_<hash8>/<id>/`. Two requests that differ only in bands or
-  `properties_filter` share the readable part and get different hashes. `params.json` round-trips
-  every parameter. Registering a collection with `short_name="S2/x"` raises.
+- **AC9 (D1, D7; A1: single-collection only, since fused cubes come in P5):** an S2 cube's path
+  reads `s2l2a_20180101-20190101_P1M_<hash8>/<id>/`, and with `mosaic_days=10` its period is `P10D`.
+  Two requests that differ only in bands or `properties_filter` share the readable part and get
+  different hashes. `params.json` round-trips every parameter. Registering a collection with
+  `short_name="S2/x"` raises. A collection registered without `short_name` gets the fallback code,
+  and a second collection with the same code raises. `"month"` with `mosaic_scheme="acquisition"`
+  raises.
 - **AC10 (D8):** a synthetic fused training run writes `lineage.json`. Its `process_steps` are, in
   order, download, mask, resample, mosaic, fuse, flatten and features. Its `granule_ids` equal the
   catalog rows the cubes used, and its `statement` names both collections and T. An inference run
   writes `lineage.json` with a `predict` step and the model digest. Its STAC Collection carries
   `processing:software["rise-eo"]` and a `metadata` asset pointing to `lineage.json`. Its
   `request`, re-run with only the output folder changed, gives byte-identical arrays on a
-  single-MGRS-tile fixture. It contains no credential, no `runner_kwargs` value and no personal
-  path. `geometry.geojson` matches its recorded sha256. Editing a feature function's body changes
+  single-MGRS-tile fixture. (A1) It contains no credential and no `runner_kwargs` value. Its paths
+  are recorded as given. `geometry.geojson` matches its recorded sha256. Editing a feature function's body changes
   its recorded source hash.
 - **AC11 (D9):** a bundle saved with `training_data=` holds the training `lineage.json`. Inference
   with the same inputs passes. Inference with `properties_filter={"sat:orbit_state": "descending"}`
   against a both-orbits training set raises, naming `properties_filter` and both values. A bundle
   without training lineage prints one line and runs.
 
-Real runs (gate 4) run **on Azure ML only**, in one P5 run-book. The archive is on blob, and the
+Real runs (gate 4) run **on Azure ML only**. (A1) P5's run-book holds AC7, and P6 extends the same
+run-book with AC8, since AC8 reads D8's lineage. The archive is on blob, and the
 downloads and builds run as AML jobs (`runner="aml"`). Only the flattened arrays and one fused cube
 (tens of MB) land on the laptop. No S1 scene is ever downloaded locally.
 
