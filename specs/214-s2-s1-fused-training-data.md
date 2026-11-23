@@ -1,6 +1,6 @@
 ---
 status: current
-summary: A new model takes Sentinel-2 L2A (all bands) and Sentinel-1 RTC (VV, VH) as one input, as 12 calendar-month median composites over one year, on S2's 10 m B08 grid, with each label polygon on its own one-year window. Add calendar-month windows (`mosaic_days="month"`), per-polygon windows in `create_training_data` (every polygon must give the same T), an explicit opt-in to median both S1 orbit states together, a `CollectionInput` so one call can download, build and infer over several collections, and a fused datacube that builds each collection onto the first collection's grid and joins them along the band axis, at training and at inference. Cube paths become readable (collection, window, bands) with a short hash kept as the identity. Real runs are on Azure ML only. Closes #99.
+summary: A new model takes Sentinel-2 L2A (all bands) and Sentinel-1 RTC (VV, VH) as one input, as 12 calendar-month median composites over one year, on S2's 10 m B08 grid, with each label polygon on its own one-year window. Add calendar-month windows (`mosaic_days="month"`), per-polygon windows in `create_training_data` (every polygon must give the same T), an explicit opt-in to median both S1 orbit states together, a `CollectionInput` so one call can download, build and infer over several collections, and a fused datacube that builds each collection onto the first collection's grid and joins them along the band axis, at training and at inference. Cube paths become short and readable (collection codes, window, ISO 8601 period), with a hash kept as the identity and the full parameters in `params.json`. Real runs are on Azure ML only. Closes #99.
 issue: "#214"
 ---
 
@@ -134,7 +134,7 @@ When `inputs` has more than one entry, each per-polygon or per-cell task builds 
    concatenate along the band axis in `inputs` order. The fused cube is `float32`. Each component's
    nodata becomes 0, the fused cube's single nodata (S1 RTC declares −32768).
 5. **Paths** follow D7. Component cubes keep their own paths, so a rerun resumes them. A component
-   built onto another collection's grid gets `_on-<collection>` in its path and `grid_from` in its
+   built onto another collection's grid gets `-on-<code>` in its path and `grid_from` in its
    hash, so it never collides with a standalone cube. The fused cube's metadata and `params.json`
    list each component's collection, path and provenance.
 
@@ -149,37 +149,39 @@ build-and-join function as `create_training_data`, so training and inference fea
 diverge (ROADMAP F1). Preflight checks that `adapter.required_bands` is a subset of the fused band
 list. The adapter contract does not change: `required_bands` names fused bands (`"B04"`, `"vv"`, …).
 
-### D7 — Readable cube paths: name for people, hash for identity
+### D7 — Short readable cube paths: name for people, hash for identity
 
-Today a cube lives at `{run}/<start>_<end>_m<days>_<hash8>/{id}/`, and bands, collection,
-declaration, `properties_filter` and `processing` hide inside the 8-character hash. Every cube
-path, single-collection or fused, becomes:
+Today a cube lives at `{run}/<start>_<end>_m<days>_<hash8>/{id}/`. The collection,
+`properties_filter`, `processing` and declaration hide inside the 8-character hash. Every cube
+path, single-collection or fused, becomes one short segment:
 
 ```
-{run}/{collection}/{start}_{end}_m{mosaic}/{bands}_{hash8}/{id}/
+{run}/{collections}_{start}-{end}_{period}_{hash8}/{id}/
 ```
 
-| part | single collection | fused (D5) |
-|---|---|---|
-| `{collection}` | `sentinel-2-l2a` | `sentinel-2-l2a__sentinel-1-rtc` |
-| window | `20180101_20190101_mmonth` | same |
-| `{bands}` | `B01-B02-B03-B04-B05-B06-B07-B08-B8A-B09-B11-B12-SCL` | `B01-…-SCL__vv-vh` |
-| S1 component on S2's grid | `sentinel-1-rtc/…/vv-vh_on-sentinel-2-l2a_<hash8>/` | — |
+| cube | segment (characters) |
+|---|---|
+| S2, one month, 10-day mosaic | `s2l2a_20180601-20180701_P10D_ab12cd34` (37) |
+| fused S2 + S1, one year, monthly | `s2l2a-s1rtc_20180101-20190101_P1M_3f9a1c2e` (42) |
+| S1 component built on S2's grid | `s1rtc-on-s2l2a_20180101-20190101_P1M_9e8d7c6b` (45) |
 
-- Bands appear in request order, joined by `-`. Collections are joined by `__`. Only
-  `[A-Za-z0-9._-]` may appear in a readable part; a band or collection name with any other character
-  raises. These characters need no escaping in a blob URL or on Windows.
+Today's segment is 30 characters, so the new one adds about a dozen.
+
+- **Collection codes.** Each collection module declares a `SHORT_NAME` next to its declaration
+  (`s2l2a`, `s1rtc`). A caller's registered collection may pass `short_name=` to `register()`, and
+  its collection id is used when it passes none. Fused cubes join codes with `-` in `inputs` order.
+  A code must match `[a-z0-9]+`, or registration raises.
+- **Dates** use ISO 8601's basic form, `YYYYMMDD`. **The period** is an ISO 8601 duration: `P1M` for
+  `mosaic_days="month"`, `P<n>D` for an `int`.
+- **Bands are not in the name.** All 13 S2 bands alone would take 51 characters. Bands are in the
+  hash, so two band sets never share a path, and `params.json` lists them.
 - **`{hash8}` stays the identity.** It digests every parameter, readable or not (bands, collection,
-  declaration digest, `properties_filter`, `processing`, `grid_from`). The readable parts are for
+  declaration digest, `properties_filter`, `processing`, `grid_from`). The readable part is for
   people; the hash alone keeps two different requests from sharing a path.
-- **`params.json`** sits in each `{bands}_{hash8}/` folder and writes out every parameter in plain
-  form, including the ones only the hash carries (`properties_filter`, `processing`, the
-  declaration) and, for a fused cube, its components' paths.
+- **`params.json`** sits in each segment folder and writes out every parameter in plain form: bands,
+  `properties_filter`, `processing`, the declaration and, for a fused cube, its components' paths.
 - The run's membership never enters the path: adding a polygon or cell adds one `{id}/` folder and
   moves nothing else.
-- On Windows, a local cube path longer than 259 characters raises at preflight, naming the path and
-  the `LongPathsEnabled` setting. Without that check, the failure would surface later as a confusing
-  file-not-found error.
 - **This moves every existing cube path once.** Cubes built before it are rebuilt on the next run.
   There is no shim (repo rule).
 
@@ -215,10 +217,10 @@ path, single-collection or fused, becomes:
   store path, whose base name pairs "a 20-byte digest for identification" with "a symbolic name for
   people to read" (`/nix/store/q06x…-firefox-33.1`). D7 copies that split, with the readable part
   first so paths sort by collection and window. Hydra's per-run `.hydra/config.yaml` ("a dump of the
-  user specified configuration") is the precedent for `params.json`. Hive-style `key=value` folders
+  user specified configuration") is the precedent for `params.json`. The period follows ISO 8601
+  durations, as sits writes them (`period = "P16D"`). Hive-style `key=value` folders
   (`/year=2009/month=11/`, the layout Apache Arrow reads as partitions) were rejected: no query engine
-  reads these paths, and the keys would roughly double their length against Windows' 260-character
-  `MAX_PATH`.
+  reads these paths, and the keys would make them longer, the opposite of the goal.
 
 ## How to verify
 
@@ -241,10 +243,9 @@ Tests (synthetic, in `tests/`):
   fused cubes.
 
 - **AC9 (D7):** the path of a fused cube reads
-  `sentinel-2-l2a__sentinel-1-rtc/20180101_20190101_mmonth/B01-…-SCL__vv-vh_<hash8>/<id>/`. Two
-  requests that differ only in `properties_filter` share the readable part and get different
-  hashes. `params.json` round-trips every parameter. A band name containing `/` raises. On
-  Windows, a 300-character local path raises at preflight.
+  `s2l2a-s1rtc_20180101-20190101_P1M_<hash8>/<id>/`. Two requests that differ only in bands or
+  `properties_filter` share the readable part and get different hashes. `params.json` round-trips
+  every parameter. Registering a collection with `short_name="S2/x"` raises.
 
 Real runs (gate 4) run **on Azure ML only**, in one P5 run-book. The archive is on blob, and the
 downloads and builds run as AML jobs (`runner="aml"`). Only the flattened arrays and one fused cube
@@ -332,9 +333,10 @@ Each implementation PR updates `README.md`, `ARCHITECTURE.md`, `CONTEXT.md`, `RO
 - Apache Arrow, "Tabular Datasets" (`arrow.apache.org/docs/python/dataset.html`): Hive-style
   `/key=value/` partition folders, the rejected alternative (D7). Taken from a summary of the page.
 - Microsoft, "Maximum Path Length Limitation": `MAX_PATH` is 260 characters unless long paths are
-  enabled (D7's Windows check). Microsoft, "Naming and Referencing Containers, Blobs, and Metadata":
-  blob names up to 1,024 characters, and reserved URL characters must be escaped (D7's character
-  set).
+  enabled, one reason D7 keeps the segment short. Microsoft, "Naming and Referencing Containers,
+  Blobs, and Metadata": reserved URL characters must be escaped, which is why D7's codes are
+  `[a-z0-9]` joined by `-` and `_`.
+- sits book (above): `period = "P16D"`, an ISO 8601 duration, the form of D7's period.
 
 Searches run for this spec: openEO resample/merge and monthly aggregation; combining S1 ascending and
 descending in monthly composites for crop classification; STAC multi-collection item search;
