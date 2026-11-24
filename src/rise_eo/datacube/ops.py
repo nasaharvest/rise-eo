@@ -19,7 +19,16 @@ import pandas as pd
 
 from rise_eo import config
 
-MOSAIC_SCHEMES = ("calendar", "acquisition")
+MOSAIC_SCHEMES = ("calendar",)
+
+
+def check_mosaic_scheme(mosaic_scheme: str) -> None:
+    """Raise `ValueError` unless `mosaic_scheme` is `"calendar"`."""
+    if mosaic_scheme not in MOSAIC_SCHEMES:
+        raise ValueError(
+            f"mosaic_scheme={mosaic_scheme!r} is not supported: only \"calendar\" is "
+            "accepted (the legacy \"acquisition\" scheme was removed)."
+        )
 
 
 def run_ops(datacube, metadata, sequence):
@@ -65,50 +74,23 @@ def drop_bands(datacube, metadata, *, bands_to_drop):
 def median_mosaic(datacube, metadata, *, startdate: datetime.datetime,
                   enddate: datetime.datetime, mosaic_days=20, mask_value=0,
                   mosaic_scheme: str | None = None):
-    """Bucket timestamps into `mosaic_days` windows; per-bucket nanmedian (treating
-    `mask_value` as NaN). Numba-accelerated core.
+    """Median-mosaic `timestamps` into calendar windows over `[startdate, enddate)`, one slice per window.
 
-    `mosaic_scheme` (default `config.MOSAIC_SCHEME` = "calendar"):
-
-    - **"calendar"** — fixed calendar windows `[startdate + k*mosaic_days, ...)` over
-      `[startdate, enddate)`; label = the window-start boundary; **every** window is
-      emitted (an empty window → an all-`mask_value` slice). The output `timestamps`
-      are thus a pure function of `(startdate, enddate, mosaic_days)`, identical across
-      any two datacubes built with those inputs — so `flatten` can concatenate cubes
-      from different MGRS tiles/orbits/zones.
-
-      How the window vs the revisit cadence interact:
-        * `mosaic_days` > cadence  → several acquisitions per window get composited
-          (`nanmedian`) into one slice — the normal temporal-mosaic case.
-        * `mosaic_days` ≈ cadence  → ~one acquisition per window (median of one = itself).
-        * `mosaic_days` < cadence  → each acquisition still lands alone in its window
-          (unchanged, nothing lost), but the windows *between* acquisitions have no data
-          and are emitted as all-`mask_value` slices. The cube degenerates to the raw
-          time series laid on a fixed calendar grid, padded with empty slices — correct
-          and cross-shape-consistent, but larger. Choose `mosaic_days` ≥ the revisit.
-    - **"acquisition"** — legacy behavior: windows track the actual acquisition dates
-      (a gap opens a new interval), labels = first acquisition per window, empty windows
-      skipped. Anchor shifts ROI-to-ROI; kept for reproducing pre-spec-15 outputs.
+    Every window is emitted (an empty one is all-`mask_value`) and labelled by its start, so the
+    `timestamps` axis depends only on `(startdate, enddate, mosaic_days)`. `mosaic_scheme` must be
+    `"calendar"`.
     """
     if mosaic_scheme is None:
         mosaic_scheme = config.MOSAIC_SCHEME
-    if mosaic_scheme not in MOSAIC_SCHEMES:
-        raise ValueError(f"mosaic_scheme must be one of {MOSAIC_SCHEMES}")
+    check_mosaic_scheme(mosaic_scheme)
     if mosaic_days < 1:
         return datacube, metadata
 
     timestamps = metadata["timestamps"]
-    if mosaic_scheme == "calendar":
-        labels, index_intervals = _calendar_windows(
-            timestamps=timestamps, startdate=startdate, enddate=enddate,
-            mosaic_days=mosaic_days,
-        )
-    else:  # "acquisition"
-        index_intervals = _get_mosaic_ts_index_ranges(
-            timestamps=timestamps, startdate=startdate, enddate=enddate,
-            mosaic_days=mosaic_days,
-        )
-        labels = [timestamps[r[0]] for r in index_intervals]
+    labels, index_intervals = _calendar_windows(
+        timestamps=timestamps, startdate=startdate, enddate=enddate,
+        mosaic_days=mosaic_days,
+    )
 
     dtype = datacube.dtype
     datacube = datacube.astype(float)
@@ -187,28 +169,6 @@ def _fixed_windows(startdate, enddate, mosaic_days):
         windows.append((lo, lo + datetime.timedelta(days=mosaic_days)))
         lo = windows[-1][1]
     return windows
-
-
-def _get_mosaic_ts_index_ranges(timestamps, startdate, enddate, mosaic_days=20):
-    """Map sorted `timestamps` to (start_idx, end_idx) ranges over `mosaic_days`
-    windows anchored at `startdate`. Faithful legacy port, including its quirk that a
-    gap opens a new interval (advancing one bucket), so ranges track occupied buckets
-    rather than every fixed window."""
-    startdate, enddate = _checked_bounds(timestamps, startdate, enddate)
-
-    mosaic_buckets = _fixed_windows(startdate, enddate, mosaic_days)
-
-    cur = 0
-    ts_indexes = [[]]
-    for index, ts in enumerate(timestamps):
-        lte_date = mosaic_buckets[cur][1]
-        if ts <= lte_date:
-            ts_indexes[cur].append(index)
-        else:
-            ts_indexes.append([index])
-            cur += 1
-
-    return [(min(g), max(g)) for g in ts_indexes if len(g) > 0]
 
 
 def _calendar_windows(timestamps, startdate, enddate, mosaic_days=20):

@@ -36,6 +36,7 @@ from rise_eo.catalog.catalog import (
     properties_filter_values,
 )
 from rise_eo.catalog.declaration import CollectionDeclaration
+from rise_eo.datacube import ops
 from rise_eo.datacube.files import CUBE_METADATA_NAME, CUBE_NAME
 from rise_eo.storage import fs
 from rise_eo.workflows import runners
@@ -135,6 +136,7 @@ def params_key(
 
     Spec: 58 D4, D9.3; 59 D6.
     """
+    ops.check_mosaic_scheme(mosaic_scheme)
     parts = [",".join(bands), mosaic_scheme, collection, declaration_module.digest(declaration)]
     selection = _canonicalize_properties_filter(properties_filter)
     if selection:
@@ -283,6 +285,7 @@ def setup(
 
     Spec: 58 D9, D13; 59 D6.
     """
+    ops.check_mosaic_scheme(mosaic_scheme)
     startdate = pd.to_datetime(startdate, utc=True)
     enddate = pd.to_datetime(enddate, utc=True)
     declaration = _collections.get(collection)
@@ -993,6 +996,7 @@ def run_create_datacube(
     catalog access) is missing and not already known-empty. Removing the flag entirely is
     blocked on #84.
     """
+    ops.check_mosaic_scheme(mosaic_scheme)
     bands = [_collections.get(collection).canonical_to_native(b) for b in bands]
     if overwrite_setup_csv:
         if fs.exists(csv_filepath):

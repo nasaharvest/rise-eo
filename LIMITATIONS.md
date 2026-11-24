@@ -92,3 +92,4 @@ From the pre-fsd repos (`fetch_satdata`, `rsutils`, `cdseutils`), left out on pu
 | `rsutils` plotting, `rich_data_filter`, `esa_download`, `utils_preprocess` (SAR scaling, patch-finding) | not on the data-prep path; plotting belongs in notebooks | per need |
 | Band ops: rolling `median_mosaic` (window/step), `sav_gol` smoothing, `trim_bands`, `modify_bands_chunkwise` | not used by any band sequence | a training-time rolling mosaic, temporal smoothing, timestamp trimming, or out-of-memory band math |
 | Preprocess-log save and replay | not on the band path | a preprocessing recipe must be persisted and replayed |
+| `mosaic_scheme="acquisition"` (windows that follow the acquisition dates) | its windows depend on the data, so `T` and S2/S1 alignment could not be known before download; `"calendar"` is the only scheme | a use case needs data-driven windows |

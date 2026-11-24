@@ -12,8 +12,7 @@ and UTM zones share a `timestamps` axis** so `flatten` can concatenate them.
 > identical `timestamps` axis. That only holds because `median_mosaic` defaults to
 > `mosaic_scheme="calendar"` (fixed calendar windows off the caller's `startdate`), so a
 > field in EPSG:32636 and one in EPSG:32637 both label their windows `2018-06-01` /
-> `2018-06-21`. With the legacy `"acquisition"` scheme this run would raise on the
-> consistency gate.
+> `2018-06-21`.
 
 Data: the COG archive `satellite_benchmark/sentinel-2-l2a/catalog.parquet` (Ethiopia,
 EPSG:32636 & 32637; bands **B04/B08/B8A/SCL**) + a **EuroCrops** training set,

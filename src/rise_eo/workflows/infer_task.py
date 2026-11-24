@@ -67,6 +67,7 @@ def run_infer_task(
     per process, not once per cell, when this is called in a loop over a group that shares
     one process (see `run_infer_group` / the `create_inference` Snakefile).
     """
+    ops.check_mosaic_scheme(mosaic_scheme)
     if not overwrite and fs.exists(output_filepath):
         return output_filepath
     _task.run_task(
@@ -155,8 +156,7 @@ def _parse_args(argv=None) -> argparse.Namespace:
                    "(single-cell mode)")
     p.add_argument("--bands", help="comma-separated, e.g. B04,B08,B8A,SCL (single-cell mode)")
     p.add_argument("--mosaic-days", type=int, default=config.MOSAIC_DAYS)
-    p.add_argument("--mosaic-scheme", default=config.MOSAIC_SCHEME,
-                   choices=list(ops.MOSAIC_SCHEMES))
+    p.add_argument("--mosaic-scheme", default=config.MOSAIC_SCHEME)
     p.add_argument("--declaration-filepath",
                    help="control file written by setup(): the resolved "
                         "CollectionDeclaration as JSON (single-cell mode; spec 58 D13)")
