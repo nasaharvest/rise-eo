@@ -15,7 +15,9 @@ decision changes direction. One decision is new: D10, from the maintainer's #147
 - D2: states the flatten skip identity per window, and drops the `mosaic_days` comparison. The
   T check is a preflight check, made before any download. Corrects the claim that training checks
   T against the adapter: it does not, by design;
-- D4: corrects the length-1 rule;
+- D4: corrects the length-1 rule. Band names are fixed by rise-eo when a collection is added
+  (`BANDS` per collection, plus a test that no two built-in collections share one); callers never
+  name bands;
 - D5: the join also checks CRS and transform, and defines `grid_from` and the fused dtype;
 - D7: defines the `SHORT_NAME` fallback;
 - D8: states how paths are recorded;
@@ -145,6 +147,17 @@ CollectionInput(
   S1 input with `max_cloudcover` fails before the S2 download is paid for.
 - A collection may appear only once in `inputs`, and band names must be unique across inputs.
   Either violation raises.
+- (A1) **Callers never name bands; rise-eo does, when a collection is added.** Each built-in
+  collection module declares `BANDS`, its full list of rise-eo band names, next to D7's
+  `SHORT_NAME` (`s2l2a`: `config.S2L2A_ALL_BANDS`; `s1rtc`: `("vv", "vh")`). A test asserts that no
+  two built-in collections share a band name, so a clash fails CI the day the collection is added.
+  `docs/adding-a-source.md` states the rule. A new collection whose provider names clash with
+  existing ones (HLS's `B04`, `B8A`) maps them to new rise-eo names, chosen in that collection's
+  spec. The fusion-time check above stays as the safety net for collections a caller registers
+  with `register()`, and its error names both collections. Prior art: openEO and xarray also
+  refuse a clash rather than rename it (`merge_cubes` needs an `overlap_resolver`; `xarray.merge`
+  raises `MergeError`). Earth Engine's automatic `B04_1` renaming was rejected, because the new name
+  no longer says which satellite the band came from.
 - (A1) With one input, `create_training_data` and `run_inference` build and infer exactly as with
   the scalar arguments. `download(inputs=...)` always returns the dict, even with one input.
 
@@ -348,7 +361,14 @@ before download. Without it, both are pure functions of the parameters. Closes #
 - **D4:** STAC API item search takes `collections` as a list, matched as OR. That is a single request
   over several collections, which `inputs` mirrors at the verb level. The `CollectionInput` type
   itself is homemade: we found no pre-2022 library whose download call bundles per-collection
-  bands, filters and cloud cover in one value.
+  bands, filters and cloud cover in one value. (A1) Band-name clashes: every library we checked
+  that stacks satellites on one band axis either refuses a clash (openEO `merge_cubes` without an
+  `overlap_resolver`; `xarray.merge`), renames it automatically (Earth Engine `addBands`: `foo` →
+  `foo_1`), or does not check at all (TorchGeo's `concat_samples` stacks the channels, and its
+  samples carry no band names). rslearn avoids the question: each satellite stays a separately
+  named input, and its `Concatenate` transform selects bands by index. sits reads matching names as
+  more dates of the same band. D4 refuses, and moves the naming to the moment a collection is
+  added, so no caller ever has to choose a name.
 - **D5, D6:** openEO `resample_cube_spatial` ("Resample the spatial dimensions to match a target
   data cube", default `near`), then `merge_cubes` (cubes with different bands merge with no overlap
   resolver). Both are in openeo-processes 1.0.0 (2020). sits does the same: regularize each cube to
@@ -395,7 +415,9 @@ Tests (synthetic, in `tests/`):
   filter is shown to reach the node.
 - **AC4:** `download(inputs=[s2, s1])` writes two catalogs and returns both paths. An S1 input with
   `max_cloudcover` fails at preflight before the S2 download runs. A repeated collection or band name
-  raises.
+  raises. (A1) The built-in collections' `BANDS` are pairwise disjoint (a test that fails when a
+  collection with a clashing name is added). Fusing two caller-registered collections that share
+  a band name raises, naming the band and both collections.
 - **AC5:** an image with the reference's shape and a shifted transform is resampled. The fused
   cube's bands are in `inputs` order, its nodata is 0, and it is `float32` in the array and in its
   metadata. (A1) Mismatched timestamps, CRS or transform raise. The fused cube's path reads
@@ -509,6 +531,14 @@ Each implementation PR updates `README.md`, `ARCHITECTURE.md`, `CONTEXT.md`, `RO
 - MPC STAC collections `sentinel-2-l2a` and `sentinel-1-rtc`: L2A's 12 spectral bands at
   10/20/60 m with no B10 (Problem); RTC `vv`/`vh` as float32, nodata −32768, 10 m, orthorectified to
   UTM and "not shifted to any specific grid" (Problem 5, D5).
+- (A1) Band-name clashes (D4): openEO `merge_cubes.json` and `rename_labels.json` (1.2.0), whose
+  example 2 says "An overlap resolver is *required* to resolve overlap in band `B2`"; xarray
+  `merge` docs (`MergeError`, `compat="override"`); Earth Engine `ee.Image.addBands` docs (the
+  numeric-suffix rename, and `overwrite`); sits `sits_merge` reference (same bands combine the
+  timelines, different bands combine the bands, anything else raises); TorchGeo `datasets/geo.py`
+  and `datasets/utils.py` on GitHub (`IntersectionDataset` defaults to `concat_samples`, which is
+  `torch.cat`, with no band-name check); rslearn's local docs (`ModelConfig.md` inputs,
+  `Transforms.md` `Concatenate`, `examples/OlmoEarthEmbeddings.md`).
 - STAC API item search (`collections` as a list, OR-matched), as described in NASA CMR's STAC OpenAPI
   docs and Element 84's Earth Search docs (D4).
 - Spec 58 D9, D11, D16 and its S1 download measurement (Problem 3, 5; Risks).
