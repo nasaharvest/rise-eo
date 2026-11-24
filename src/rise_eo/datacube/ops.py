@@ -20,6 +20,7 @@ import pandas as pd
 from rise_eo import config
 
 MOSAIC_SCHEMES = ("calendar",)
+MONTH = "month"
 
 
 def check_mosaic_scheme(mosaic_scheme: str) -> None:
@@ -29,6 +30,31 @@ def check_mosaic_scheme(mosaic_scheme: str) -> None:
             f"mosaic_scheme={mosaic_scheme!r} is not supported: only \"calendar\" is "
             "accepted (the legacy \"acquisition\" scheme was removed)."
         )
+
+
+def check_mosaic_days(mosaic_days, startdate=None):
+    """Return `mosaic_days` as an `int` or `"month"`, raising `ValueError` for anything else.
+
+    With `startdate` and `"month"`, `startdate` must be the 1st of a month at 00:00 UTC.
+    """
+    if isinstance(mosaic_days, (int, np.integer)) and not isinstance(mosaic_days, bool):
+        return int(mosaic_days)
+    if mosaic_days != MONTH:
+        raise ValueError(f'mosaic_days must be an int or "month", got {mosaic_days!r}.')
+    if startdate is not None:
+        start = _dt2ts(startdate).tz_convert("UTC")
+        if start != start.normalize() or start.day != 1:
+            raise ValueError(
+                f'mosaic_days="month" needs startdate on the 1st of a month at 00:00 UTC, got {start}.'
+            )
+    return MONTH
+
+
+def parse_mosaic_days(value):
+    """`"month"` or an integer, read back from a CLI argument or a CSV cell."""
+    if isinstance(value, str) and value.strip() != MONTH:
+        value = int(value)
+    return check_mosaic_days(value.strip() if isinstance(value, str) else value)
 
 
 def run_ops(datacube, metadata, sequence):
@@ -83,7 +109,8 @@ def median_mosaic(datacube, metadata, *, startdate: datetime.datetime,
     if mosaic_scheme is None:
         mosaic_scheme = config.MOSAIC_SCHEME
     check_mosaic_scheme(mosaic_scheme)
-    if mosaic_days < 1:
+    mosaic_days = check_mosaic_days(mosaic_days, startdate)
+    if mosaic_days != MONTH and mosaic_days < 1:
         return datacube, metadata
 
     timestamps = metadata["timestamps"]
@@ -160,13 +187,15 @@ def _checked_bounds(timestamps, startdate, enddate):
     return startdate, enddate
 
 
-def _fixed_windows(startdate, enddate, mosaic_days):
-    """The `(lo, hi)` pairs of `mosaic_days`-long windows tiling `[startdate, enddate)`;
-    the last one may run past `enddate`."""
+def mosaic_windows(startdate, enddate, mosaic_days):
+    """The `(lo, hi)` pairs of `mosaic_days`-long (or calendar-month) windows tiling
+    `[startdate, enddate)`; the last one may run past `enddate`."""
+    check_mosaic_days(mosaic_days, startdate)
+    step = pd.DateOffset(months=1) if mosaic_days == MONTH else datetime.timedelta(days=mosaic_days)
     windows = []
     lo = startdate
     while lo < enddate:
-        windows.append((lo, lo + datetime.timedelta(days=mosaic_days)))
+        windows.append((lo, lo + step))
         lo = windows[-1][1]
     return windows
 
@@ -185,7 +214,7 @@ def _calendar_windows(timestamps, startdate, enddate, mosaic_days=20):
     only on `(startdate, enddate, mosaic_days)`."""
     startdate, enddate = _checked_bounds(timestamps, startdate, enddate)
 
-    windows = _fixed_windows(startdate, enddate, mosaic_days)
+    windows = mosaic_windows(startdate, enddate, mosaic_days)
 
     labels, intervals = [], []
     for k, (lo, hi) in enumerate(windows):

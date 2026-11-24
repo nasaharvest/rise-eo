@@ -148,7 +148,7 @@ def params_key(
 
 
 def window_folder_segment(
-    startdate: datetime.datetime, enddate: datetime.datetime, mosaic_days: int, *,
+    startdate: datetime.datetime, enddate: datetime.datetime, mosaic_days: int | str, *,
     bands: list[str], mosaic_scheme: str, collection: str, declaration: CollectionDeclaration,
     properties_filter: Mapping[str, str | Sequence[str]] | None = None,
     processing: str | None = None,
@@ -201,7 +201,7 @@ def _refuse_duplicate_ids(shapes_gdf: gpd.GeoDataFrame, id_col: str) -> None:
 
 
 def _append_input_rows(
-    rows: list[dict], csv_filepath: str, *, mosaic_days: int, mosaic_scheme: str,
+    rows: list[dict], csv_filepath: str, *, mosaic_days: int | str, mosaic_scheme: str,
     collection: str, bands: list[str],
     properties_filter: Mapping[str, str | Sequence[str]] | None, processing: str | None,
 ) -> None:
@@ -233,7 +233,7 @@ def setup(
     startdate: datetime.datetime,
     enddate: datetime.datetime,
     bands: list[str],
-    mosaic_days: int,
+    mosaic_days: int | str,
     csv_filepath: str,
     label_col: str | None,
     mosaic_scheme: str = config.MOSAIC_SCHEME,
@@ -288,6 +288,7 @@ def setup(
     ops.check_mosaic_scheme(mosaic_scheme)
     startdate = pd.to_datetime(startdate, utc=True)
     enddate = pd.to_datetime(enddate, utc=True)
+    mosaic_days = ops.check_mosaic_days(mosaic_days, startdate)
     declaration = _collections.get(collection)
     # Canonicalize bands to native asset keys as early as possible: every
     # downstream use of `bands` -- the digest, `input.csv`, the builder's catalog-band
@@ -596,7 +597,7 @@ def _presence_for_paths(datacube_filepaths, *, label: str) -> dict[str, bool]:
 
 
 def _row_matches_window(
-    row, *, bands: list[str], mosaic_days: int, startdate, enddate,
+    row, *, bands: list[str], mosaic_days: int | str, startdate, enddate,
     mosaic_scheme: str, collection: str,
     properties_filter: Mapping[str, str | Sequence[str]] | None = None,
     processing: str | None = None,
@@ -762,7 +763,7 @@ def _current_rows(
 def build_shortfall_only(
     *, catalog_filepath: str, timestamp_col: str, shapefilepath: str, id_col: str,
     run_folderpath: str, startdate, enddate, bands: list[str],
-    mosaic_days: int, csv_filepath: str,
+    mosaic_days: int | str, csv_filepath: str,
     label_col: str | None, mosaic_scheme: str = config.MOSAIC_SCHEME,
     max_concurrent: int = config.SETUP_MAX_CONCURRENT,
     collection: str = config.SATELLITE_S2L2A,
@@ -962,7 +963,7 @@ def run_create_datacube(
     startdate: datetime.datetime,
     enddate: datetime.datetime,
     bands: list[str],
-    mosaic_days: int,
+    mosaic_days: int | str,
     csv_filepath: str,
     label_col: str | None,
     cores: int,
@@ -997,6 +998,7 @@ def run_create_datacube(
     blocked on #84.
     """
     ops.check_mosaic_scheme(mosaic_scheme)
+    ops.check_mosaic_days(mosaic_days, startdate)
     bands = [_collections.get(collection).canonical_to_native(b) for b in bands]
     if overwrite_setup_csv:
         if fs.exists(csv_filepath):

@@ -41,7 +41,7 @@ def run_infer_task(
     export_folderpath: str,
     *,
     bands: list[str],
-    mosaic_days: int,
+    mosaic_days: int | str,
     declaration_filepath: str,
     bundle_path: str,
     output_filepath: str,
@@ -124,7 +124,7 @@ def run_infer_group(
             pd.to_datetime(r["startdate"]), pd.to_datetime(r["enddate"]),
             export_folderpath,
             bands=str(r["bands"]).split(","),
-            mosaic_days=int(r["mosaic_days"]),
+            mosaic_days=ops.parse_mosaic_days(r["mosaic_days"]),
             declaration_filepath=str(r["declaration_filepath"]),
             bundle_path=bundle_path,
             output_filepath=output_filepath,
@@ -155,7 +155,8 @@ def _parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("export_folderpath", nargs="?", help="where datacube.npy + metadata go "
                    "(single-cell mode)")
     p.add_argument("--bands", help="comma-separated, e.g. B04,B08,B8A,SCL (single-cell mode)")
-    p.add_argument("--mosaic-days", type=int, default=config.MOSAIC_DAYS)
+    p.add_argument("--mosaic-days", type=ops.parse_mosaic_days, default=config.MOSAIC_DAYS,
+                   help='days per window, or "month"')
     p.add_argument("--mosaic-scheme", default=config.MOSAIC_SCHEME)
     p.add_argument("--declaration-filepath",
                    help="control file written by setup(): the resolved "

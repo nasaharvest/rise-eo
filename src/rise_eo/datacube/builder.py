@@ -286,7 +286,7 @@ def build_datacube(
     enddate: datetime.datetime,
     bands: list[str],
     *,
-    mosaic_days: int = config.MOSAIC_DAYS,
+    mosaic_days: int | str = config.MOSAIC_DAYS,
     reference_band: str | None = None,
     declaration: CollectionDeclaration | None = None,
     properties_filter: Mapping[str, str | Sequence[str]] | None = None,
@@ -351,6 +351,7 @@ def build_datacube(
     Spec: 03, 58.
     """
     ops.check_mosaic_scheme(mosaic_scheme)
+    ops.check_mosaic_days(mosaic_days, startdate)
     declared = _resolve_build_declaration(catalog_subset, declaration)
     # The filter is applied HERE as well as upstream where the catalog is queried
     # (`workflows.create_datacube.setup`) -- applying it twice is idempotent, and a
