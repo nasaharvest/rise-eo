@@ -52,9 +52,13 @@ def check_mosaic_days(mosaic_days, startdate=None):
 
 def parse_mosaic_days(value):
     """`"month"` or an integer, read back from a CLI argument or a CSV cell."""
-    if isinstance(value, str) and value.strip() != MONTH:
+    if isinstance(value, str):
+        value = value.strip()
+        if value != MONTH:
+            value = float(value)
+    if isinstance(value, (float, np.floating)) and float(value).is_integer():
         value = int(value)
-    return check_mosaic_days(value.strip() if isinstance(value, str) else value)
+    return check_mosaic_days(value)
 
 
 def run_ops(datacube, metadata, sequence):

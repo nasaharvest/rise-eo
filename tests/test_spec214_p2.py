@@ -209,3 +209,32 @@ def test_segment_differs_when_only_the_start_time_or_period_differs():
     a, b = seg("2018-01-01T00:00:00"), seg("2018-01-01T12:00:00")
     assert a.rsplit("_", 1)[0] == b.rsplit("_", 1)[0] and a != b
     assert seg("2018-01-01") != seg("2018-01-01", days=11)
+
+
+@pytest.mark.parametrize("cell, want", [(20.0, 20), ("20.0", 20), ("20", 20), (" month ", "month")])
+def test_parse_mosaic_days_reads_back_what_a_csv_cell_holds(cell, want):
+    got = ops.parse_mosaic_days(cell)
+    assert got == want and type(got) is type(want)
+
+
+@pytest.mark.parametrize("bad", [20.5, "20.5", "week"])
+def test_parse_mosaic_days_still_rejects_non_whole_numbers(bad):
+    with pytest.raises(ValueError):
+        ops.parse_mosaic_days(bad)
+
+
+def test_float_days_from_a_retyped_input_csv_still_arrive_as_int(tmp_path, monkeypatch):
+    csv = tmp_path / "input.csv"
+    csv.write_text("id,export_folderpath,mosaic_days,bands\na,x,20.0,B04\n")        # what a header-only input.csv hop leaves
+    df = pd.read_csv(csv)
+    assert df["mosaic_days"].dtype == float
+    df.assign(shapefilepath="s", catalog_filepath="c", startdate="2018-01-01",
+              enddate="2019-01-01", declaration_filepath="d").to_csv(csv, index=False)
+    seen, got = [], []
+    monkeypatch.setattr(infer_task, "run_infer_task",
+                        lambda *a, **kw: seen.append(kw["mosaic_days"]) or "o")
+    infer_task.run_infer_group(str(csv), (0, 1), "bundle")
+    monkeypatch.setattr(task, "run_task", lambda *a, **kw: got.append(kw["mosaic_days"]))
+    task.main(["s", "c", "2018-01-01", "2019-01-01", "o", "--bands", "B04",
+               "--mosaic-days", str(df.iloc[0]["mosaic_days"]), "--declaration-filepath", "d"])
+    assert seen == [20] and got == [20] and type(seen[0]) is int and type(got[0]) is int
