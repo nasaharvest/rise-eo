@@ -141,8 +141,9 @@ reshape, the model call, and the output shaping.
 The model's input width is fixed at train time (e.g. RF sees `T×B`). **The contract is: same
 `T` and same `bands`.** rise-eo **validates this before any download/build**:
 - **`T` (timestamps):** thanks to spec-15 **calendar** mosaicing, `T` is a pure function of
-  `startdate`/`enddate`/`mosaic_days` — `T = ceil((enddate - startdate) / mosaic_days)`
-  (final window upper-inclusive). So rise-eo computes the inference `T` from the user's chosen
+  `startdate`/`enddate`/`mosaic_days` — `T = ceil((enddate - startdate) / mosaic_days)`, or the
+  number of month starts in `[startdate, enddate)` for `mosaic_days="month"` (final window
+  upper-inclusive). So rise-eo computes the inference `T` from the user's chosen
   dates/interval and checks `T == adapter.n_timestamps` **at config time, before a single
   tile is fetched.** (This is a concrete payoff of the calendar-mosaic decision.)
 - **bands:** `adapter.required_bands` must be obtainable from the requested source.
