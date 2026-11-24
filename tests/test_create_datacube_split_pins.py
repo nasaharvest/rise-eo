@@ -417,3 +417,18 @@ EXPECTED: dict = {
   ('open', 'w'),
   ('open', 'r')]),
 }
+
+
+def test_params_json_round_trips_a_non_empty_properties_filter_and_processing(tmp_path):
+    import json
+
+    shapes = _env(tmp_path)
+    csv = _setup(tmp_path, shapes, properties_filter={"s2:foo": "bar", "source": ["mpc"]},
+                 processing="latest")
+    export = str(pd.read_csv(csv).iloc[0]["export_folderpath"])
+    segment = os.path.basename(os.path.dirname(export))
+    params = json.loads((tmp_path / "run" / segment / "params.json").read_text())
+    assert params["properties_filter"] == {"s2:foo": ["bar"], "source": ["mpc"]}
+    assert params["processing"] == "latest"
+    assert params["bands"] == ["B04"] and params["mosaic_days"] == 20
+    assert params["collection"] == "sentinel-2-l2a" and params["mosaic_scheme"] == "calendar"
