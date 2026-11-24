@@ -4,8 +4,9 @@ Instructions for AI coding agents in this repo. People: start with `CONTRIBUTING
 
 ## What rise-eo is
 
-`rise-eo` downloads Sentinel-2 L2A and Sentinel-1 RTC imagery, builds datacubes and flattens them into training data. Its verb
-API is `rise_eo.download`, `rise_eo.create_training_data`, `run_inference` and `deploy`. It runs locally or on
+`rise-eo` downloads Sentinel-2 L2A and Sentinel-1 RTC imagery, builds datacubes and flattens them into training data. Its verbs
+are `rise_eo.download`, `create_training_data`, `flatten_training_data`, `verify_adapter`, `run_inference`
+and `deploy` (all in `rise_eo/api.py`). It runs locally or on
 Azure ML, with no cloud lock-in. Users train their own models; rise-eo does not. The plan is in
 `ROADMAP.md`, the design in `ARCHITECTURE.md`, the vocabulary in `CONTEXT.md`.
 
