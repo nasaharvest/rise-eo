@@ -167,6 +167,9 @@ def window_folder_segment(
                      properties_filter=properties_filter, processing=processing)
     mosaic_days = ops.check_mosaic_days(mosaic_days, startdate)
     period = "P1M" if mosaic_days == ops.MONTH else f"P{mosaic_days}D"
+    # The readable dates drop the time of day, so the hash also covers the full window.
+    key = hashlib.sha1(f"{key}|{startdate.isoformat()}|{enddate.isoformat()}|{mosaic_days}".encode()
+                       ).hexdigest()[:8]
     return (f"{_collections.short_name_of(collection)}_{startdate.strftime('%Y%m%d')}-"
             f"{enddate.strftime('%Y%m%d')}_{period}_{key}")
 

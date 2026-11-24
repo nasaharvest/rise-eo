@@ -199,3 +199,13 @@ def test_ac9_fallback_code_and_collision(_clean_registry):
 def test_ac9_force_reregistering_the_same_id_is_not_a_collision(_clean_registry):
     _collections.register("sentinel-2-l2a", S2_L2A_DECLARATION, force=True, short_name="s2l2a")
     assert _collections.short_name_of("sentinel-2-l2a") == "s2l2a"
+
+
+def test_segment_differs_when_only_the_start_time_or_period_differs():
+    def seg(start, days=10):
+        return create_datacube.window_folder_segment(
+            _d(start), _d("2018-03-01"), days, bands=["B04"], mosaic_scheme="calendar",
+            collection="sentinel-2-l2a", declaration=S2_L2A_DECLARATION)
+    a, b = seg("2018-01-01T00:00:00"), seg("2018-01-01T12:00:00")
+    assert a.rsplit("_", 1)[0] == b.rsplit("_", 1)[0] and a != b
+    assert seg("2018-01-01") != seg("2018-01-01", days=11)

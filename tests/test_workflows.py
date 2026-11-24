@@ -1,6 +1,7 @@
 """Tests for rise_eo.workflows (spec 08): setup, task, local dry-run."""
 
 import datetime
+import hashlib
 import importlib.util
 import os
 import re
@@ -294,7 +295,8 @@ def test_setup_export_folderpath_is_named_from_the_requested_window(tmp_path):
         collection=config.SATELLITE_S2L2A,
         declaration=_collections.get(config.SATELLITE_S2L2A),
     )
-    expected_window = f"s2l2a_20180101-20190101_P20D_{key}"
+    full = f"{key}|2018-01-01T00:00:00+00:00|2019-01-01T00:00:00+00:00|20"
+    expected_window = f"s2l2a_20180101-20190101_P20D_{hashlib.sha1(full.encode()).hexdigest()[:8]}"
     for p in df["export_folderpath"]:
         parts = os.path.normpath(p).split(os.sep)
         assert parts[-2] == expected_window, p
