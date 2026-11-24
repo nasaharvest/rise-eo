@@ -294,7 +294,7 @@ def test_setup_export_folderpath_is_named_from_the_requested_window(tmp_path):
         collection=config.SATELLITE_S2L2A,
         declaration=_collections.get(config.SATELLITE_S2L2A),
     )
-    expected_window = f"20180101_20190101_m20_{key}"
+    expected_window = f"s2l2a_20180101-20190101_P20D_{key}"
     for p in df["export_folderpath"]:
         parts = os.path.normpath(p).split(os.sep)
         assert parts[-2] == expected_window, p

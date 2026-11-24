@@ -17,17 +17,39 @@ in-process dict that does not exist inside a fresh AML job container (ADR 0031).
 
 from __future__ import annotations
 
+import re
+
 from rise_eo.catalog.declaration import CollectionDeclaration
 from rise_eo.collections import s1_rtc as _s1_rtc
 from rise_eo.collections import s2_l2a as _s2_l2a
 
-__all__ = ["register", "get", "known", "REGISTRY"]
+__all__ = ["register", "get", "known", "short_name_of", "REGISTRY"]
 
 REGISTRY: dict[str, CollectionDeclaration] = {}
+SHORT_NAMES: dict[str, str] = {}
+
+_CODE_RE = re.compile(r"[a-z0-9]+")
 
 
-def register(collection_id: str, declaration: CollectionDeclaration, *, force: bool = False) -> None:
+def _fallback_code(collection_id: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", collection_id)
+
+
+def short_name_of(collection_id: str) -> str:
+    """The code `collection_id` carries in a cube path: its registered `short_name`, else
+    the id with every character outside `[a-z0-9]` removed."""
+    return SHORT_NAMES.get(collection_id) or _fallback_code(collection_id)
+
+
+def register(
+    collection_id: str, declaration: CollectionDeclaration, *, force: bool = False,
+    short_name: str | None = None,
+) -> None:
     """Register `declaration` under `collection_id`.
+
+    `short_name` is the code the collection carries in a cube path (`[a-z0-9]+`); without
+    one it is the id with every character outside `[a-z0-9]` removed. Two collections may
+    not share a code.
 
     Refuses to silently overwrite an existing registration unless `force=True` --
     registering a variant under a name already taken is almost always a typo, not an
@@ -39,7 +61,20 @@ def register(collection_id: str, declaration: CollectionDeclaration, *, force: b
             f"rise_eo.collections.register: {collection_id!r} is already registered; pass "
             "force=True to overwrite it."
         )
+    code = short_name if short_name is not None else _fallback_code(collection_id)
+    if not _CODE_RE.fullmatch(code):
+        raise ValueError(
+            f"rise_eo.collections.register: short_name {code!r} for {collection_id!r} must "
+            "match [a-z0-9]+."
+        )
+    for other in REGISTRY:
+        if other != collection_id and short_name_of(other) == code:
+            raise ValueError(
+                f"rise_eo.collections.register: short_name {code!r} for {collection_id!r} is "
+                f"already used by {other!r}."
+            )
     REGISTRY[collection_id] = declaration
+    SHORT_NAMES[collection_id] = code
 
 
 def get(collection_id: str) -> CollectionDeclaration:
@@ -58,5 +93,5 @@ def known() -> list[str]:
     return sorted(REGISTRY)
 
 
-register(_s2_l2a.COLLECTION_ID, _s2_l2a.DECLARATION)
-register(_s1_rtc.COLLECTION_ID, _s1_rtc.DECLARATION)
+register(_s2_l2a.COLLECTION_ID, _s2_l2a.DECLARATION, short_name=_s2_l2a.SHORT_NAME)
+register(_s1_rtc.COLLECTION_ID, _s1_rtc.DECLARATION, short_name=_s1_rtc.SHORT_NAME)

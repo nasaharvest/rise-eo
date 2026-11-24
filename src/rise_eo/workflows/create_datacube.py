@@ -54,6 +54,7 @@ _UNIT_IDENTITY_COLS = (
 )
 
 DECLARATION_FILENAME = "declaration.json"
+PARAMS_FILENAME = "params.json"
 
 
 def _canonicalize_processing(processing: str | None) -> str:
@@ -154,7 +155,8 @@ def window_folder_segment(
     processing: str | None = None,
 ) -> str:
     """The one run-folder segment shared by every cell of a request:
-    `<startdate>_<enddate>_m<mosaic_days>_<params_key>`.
+    `<collection code>_<startdate>-<enddate>_<period>_<params_key>`, e.g.
+    `s2l2a_20180101-20190101_P1M_ab12cd34` (`P1M` for `"month"`, `P<n>D` for an `int`).
 
     Callers that need to name an expected cube path WITHOUT running `setup` call this with
     the same arguments `setup` was given -- same inputs, same string, no catalog access.
@@ -163,7 +165,10 @@ def window_folder_segment(
     enddate = pd.to_datetime(enddate, utc=True)
     key = params_key(bands, mosaic_scheme, collection=collection, declaration=declaration,
                      properties_filter=properties_filter, processing=processing)
-    return f"{startdate.strftime('%Y%m%d')}_{enddate.strftime('%Y%m%d')}_m{mosaic_days}_{key}"
+    mosaic_days = ops.check_mosaic_days(mosaic_days, startdate)
+    period = "P1M" if mosaic_days == ops.MONTH else f"P{mosaic_days}D"
+    return (f"{_collections.short_name_of(collection)}_{startdate.strftime('%Y%m%d')}-"
+            f"{enddate.strftime('%Y%m%d')}_{period}_{key}")
 
 
 def cube_export_folderpath(run_folderpath: str, window_segment: str, id_value) -> str:
@@ -342,6 +347,16 @@ def setup(
     )
     fs.write_text(declaration_filepath,
                   json.dumps(declaration_module.to_json(written)))
+    fs.write_text(os.path.join(run_folderpath, window_segment, PARAMS_FILENAME), json.dumps({
+        "collection": collection, "bands": bands, "startdate": str(startdate),
+        "enddate": str(enddate), "mosaic_days": mosaic_days, "mosaic_scheme": mosaic_scheme,
+        "properties_filter": {
+            k: sorted(properties_filter_values(properties_filter[k]))
+            for k in sorted(properties_filter or {})
+        },
+        "processing": processing,
+        "declaration": declaration_module.to_json(declaration),
+    }, indent=2))
 
     n_shapes = len(shapes_gdf)
     print(f"[setup] catalog read once: {len(catalog_gdf)} rows, for {n_shapes} shapes",

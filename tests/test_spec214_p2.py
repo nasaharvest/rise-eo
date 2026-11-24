@@ -2,12 +2,18 @@
 from __future__ import annotations
 
 import datetime
+import json
+import re
 
 import numpy as np
 import pandas as pd
 import pytest
+from test_workflows import _make_catalog, _two_shapes
 
 from rise_eo import api
+from rise_eo import collections as _collections
+from rise_eo.catalog import declaration as declaration_module
+from rise_eo.catalog.declaration import S2_L2A_DECLARATION
 from rise_eo.datacube import builder, ops
 from rise_eo.workflows import create_datacube, infer_task, task
 
@@ -121,3 +127,75 @@ def test_mosaic_days_survives_csv_cli_and_arrives_at_run_task_unchanged(tmp_path
         declaration_filepath="d").to_csv(shard, index=False)
     infer_task.run_infer_group(shard, (0, 1), "bundle")
     assert seen == [value] and type(seen[0]) is type(value)
+
+
+# --- D7: short readable cube paths -------------------------------------------------------
+
+
+
+
+def _segment(mosaic_days="month", bands=("B04",), **kw):
+    return create_datacube.window_folder_segment(
+        _d("2018-01-01"), _d("2019-01-01"), mosaic_days, bands=list(bands),
+        mosaic_scheme="calendar", collection="sentinel-2-l2a", declaration=S2_L2A_DECLARATION, **kw)
+
+
+def test_ac9_s2_segment_names_collection_dates_period_and_hash():
+    assert re.fullmatch(r"s2l2a_20180101-20190101_P1M_[0-9a-f]{8}", _segment("month"))
+    assert re.fullmatch(r"s2l2a_20180101-20190101_P10D_[0-9a-f]{8}", _segment(10))
+    assert re.fullmatch(r"s1rtc_20180101-20190101_P1M_[0-9a-f]{8}", create_datacube.window_folder_segment(
+        _d("2018-01-01"), _d("2019-01-01"), "month", bands=["vv"], mosaic_scheme="calendar",
+        collection="sentinel-1-rtc", declaration=_collections.get("sentinel-1-rtc")))
+
+
+def test_ac9_bands_or_filter_change_the_hash_not_the_readable_part():
+    a, b = _segment(bands=("B04",)), _segment(bands=("B04", "B08"))
+    c = _segment(properties_filter={"s2:foo": "bar"})
+    assert a.rsplit("_", 1)[0] == b.rsplit("_", 1)[0] == c.rsplit("_", 1)[0]
+    assert len({a, b, c}) == 3
+
+
+def test_ac9_params_json_writes_every_parameter(tmp_path):
+    cat, shapes = tmp_path / "catalog.parquet", tmp_path / "shapes.geojson"
+    _make_catalog(cat, tmp_path)
+    _two_shapes(shapes)
+    create_datacube.setup(
+        catalog_filepath=str(cat), timestamp_col="timestamp", shapefilepath=str(shapes),
+        id_col="id", run_folderpath=str(tmp_path / "run"), startdate=_d("2018-01-01"),
+        enddate=_d("2019-01-01"), bands=["B04", "SCL"], mosaic_days="month",
+        csv_filepath=str(tmp_path / "run" / "input.csv"), label_col=None,
+    )
+    seg = pd.read_csv(tmp_path / "run" / "input.csv").iloc[0]["export_folderpath"]
+    params = json.loads((tmp_path / "run" / seg.split("/")[-2] / "params.json").read_text())
+    assert params["collection"] == "sentinel-2-l2a" and params["bands"] == ["B04", "SCL"]
+    assert params["mosaic_days"] == "month" and params["mosaic_scheme"] == "calendar"
+    assert params["startdate"].startswith("2018-01-01") and params["enddate"].startswith("2019-01-01")
+    assert params["properties_filter"] == {} and params["processing"] is None
+    assert params["declaration"] == declaration_module.to_json(S2_L2A_DECLARATION)
+
+
+@pytest.fixture
+def _clean_registry(monkeypatch):
+    monkeypatch.setattr(_collections, "REGISTRY", dict(_collections.REGISTRY))
+    monkeypatch.setattr(_collections, "SHORT_NAMES", dict(_collections.SHORT_NAMES))
+
+
+@pytest.mark.parametrize("bad", ["S2/x", "s2-x", "", "S2"])
+def test_ac9_a_bad_short_name_raises(_clean_registry, bad):
+    with pytest.raises(ValueError, match=r"\[a-z0-9\]\+"):
+        _collections.register("my-coll", S2_L2A_DECLARATION, short_name=bad)
+
+
+def test_ac9_fallback_code_and_collision(_clean_registry):
+    _collections.register("hls2-s30", S2_L2A_DECLARATION)
+    assert _collections.short_name_of("hls2-s30") == "hls2s30"
+    with pytest.raises(ValueError, match="already used by 'hls2-s30'"):
+        _collections.register("hls2.s30", S2_L2A_DECLARATION)
+    with pytest.raises(ValueError, match="already used by 'sentinel-2-l2a'"):
+        _collections.register("other", S2_L2A_DECLARATION, short_name="s2l2a")
+    assert "other" not in _collections.REGISTRY
+
+
+def test_ac9_force_reregistering_the_same_id_is_not_a_collision(_clean_registry):
+    _collections.register("sentinel-2-l2a", S2_L2A_DECLARATION, force=True, short_name="s2l2a")
+    assert _collections.short_name_of("sentinel-2-l2a") == "s2l2a"
