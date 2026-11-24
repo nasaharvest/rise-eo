@@ -152,7 +152,7 @@ def area_median(datacube, metadata=None, *, mask_value=0):
     return out, md
 
 
-# --- private helpers (faithful port; preserve legacy bucket behavior) ---------
+# --- private helpers -----------------------------------------------------------
 
 def _dt2ts(dt: datetime.datetime, tz="UTC") -> pd.Timestamp:
     """Localize a naive datetime to a tz-aware pd.Timestamp (default UTC).
