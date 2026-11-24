@@ -1,19 +1,25 @@
 ---
 status: current
-summary: A new model takes Sentinel-2 L2A (all bands) and Sentinel-1 RTC (VV, VH) as one input, as 12 calendar-month median composites over one year, on S2's 10 m B08 grid, with each label polygon on its own one-year window. Add calendar-month windows (`mosaic_days="month"`), per-polygon windows in `create_training_data` (every polygon must give the same T), an explicit opt-in to median both S1 orbit states together, a `CollectionInput` so one call can download, build and infer over several collections, and a fused datacube that builds each collection onto the first collection's grid and joins them along the band axis, at training and at inference. Cube paths become short and readable (collection codes, window, ISO 8601 period), with a hash kept as the identity and the full parameters in `params.json`. Every training set and inference output gets a `lineage.json` (its sources and process steps), and a model bundle carries its training lineage so inference refuses inputs the model was not trained on. Real runs are on Azure ML only. Closes #99.
+summary: A new model takes Sentinel-2 L2A (all bands) and Sentinel-1 RTC (VV, VH) as one input, as 12 calendar-month median composites over one year, on S2's 10 m B08 grid, with each label polygon on its own one-year window. Add calendar-month windows (`mosaic_days="month"`), per-polygon windows in `create_training_data` (every polygon must give the same T), an explicit opt-in to median both S1 orbit states together, a `CollectionInput` so one call can download, build and infer over several collections, and a fused datacube that builds each collection onto the first collection's grid and joins them along the band axis, at training and at inference. Cube paths become short and readable (collection codes, window, ISO 8601 period), with a hash kept as the identity and the full parameters in `params.json`. Every training set and inference output gets a `lineage.json` (its sources and process steps), and a model bundle carries its training lineage so inference refuses inputs the model was not trained on. Real runs are on Azure ML only. The legacy `mosaic_scheme="acquisition"` is removed. Closes #99 and #147.
 issue: "#214"
 ---
 
 # Spec 214 — fused Sentinel-2 + Sentinel-1 datacubes, monthly windows, per-polygon dates
 
 **Status:** **SIGNED OFF (user, 2026-11-23).**
-**Amendment A1 (2026-11-23, from the gate-3 review on #215), awaiting the user's sign-off.** No decision
-changes direction. A1:
+**Amendment A1 (2026-11-23, from the gate-3 review on #215): SIGNED OFF (user, 2026-11-24).** No signed-off
+decision changes direction. One decision is new: D10, from the maintainer's #147 decision. A1:
 - adds ADR 0035 (supersedes ADR 0029 in part) and ADR 0036 (supersedes ADR 0010 in part);
-- D1: the period is named as in D7, and `"month"` needs the calendar mosaic scheme;
-- D2: states the flatten skip identity per window, and drops the `mosaic_days` comparison;
-- D4: corrects the length-1 rule;
-- D5: the join also checks CRS and transform, and defines `grid_from` and the fused dtype;
+- D1: the period is named as in D7;
+- adds D10: removes `mosaic_scheme="acquisition"` (#147), in P2;
+- D2: states the flatten skip identity per window, and drops the `mosaic_days` comparison. The
+  T check is a preflight check, made before any download. Corrects the claim that training checks
+  T against the adapter: it does not, by design;
+- D4: corrects the length-1 rule. Band names are fixed by rise-eo when a collection is added
+  (`BANDS` per collection, plus a test that no two built-in collections share one); callers never
+  name bands;
+- D5: the join also checks CRS and transform, and defines `grid_from` and the fused dtype. The fused
+  cube's metadata and `lineage.json` carry `band_collections`;
 - D7: defines the `SHORT_NAME` fallback;
 - D8: states how paths are recorded;
 - the ACs now match the phases, and the S2 band count is worded consistently.
@@ -59,8 +65,8 @@ Every parameter named `mosaic_days` (`create_training_data`, `run_inference`, `b
 - Each window's label is its month start. An empty month is an all-nodata slice, as an empty
   `int` window is today.
 - (A1) The cube path names the period as D7 does: `P1M` for `"month"`, `P<n>D` for an `int`.
-- (A1) `"month"` needs `mosaic_scheme="calendar"`, the default. With `mosaic_scheme="acquisition"`,
-  whose windows depend on the data, it raises before any work.
+- (A1) Calendar windows are the only kind once D10 removes `mosaic_scheme="acquisition"`, so
+  `"month"` needs no special guard.
 
 No other strings are accepted. Weeks, dekads and seasons wait for a model that needs them.
 
@@ -72,8 +78,17 @@ No other strings are accepted. Weeks, dekads and seasons wait for a model that n
 - Passing scalar dates when those columns exist raises (which one wins would be a guess). An empty
   or unparsable date in any row raises, naming the ids.
 - **Every polygon must give the same T** for the given `mosaic_days`, or the call raises before any
-  work, listing the ids for each T found. With an `adapter`, that T must also equal
-  `adapter.n_timestamps` (the existing check).
+  work, listing the ids for each T found. (A1) **This is a preflight check.** With calendar windows,
+  T and every window's start date follow from `startdate`, `enddate` and `mosaic_days` alone
+  (`compute_n_timestamps`, extended by D1). So the check runs on the date columns as soon as the call
+  starts: before the download leg, before any cube is built, with no catalog read. `flatten`'s check
+  (below) stays as a backstop for cubes built some other way.
+- (A1) What preflight cannot know is whether a window has imagery. An empty month becomes an
+  all-nodata slice, so T is unchanged and the check still holds.
+- (A1) With an `adapter`, `create_training_data` does **not** compare T with
+  `adapter.n_timestamps`. It deliberately never has (`api.py`): training data comes before the
+  model, so the adapter fits whatever T the caller picks. `run_inference` keeps its existing
+  preflight `T == n_timestamps` check, and D9 adds the training lineage to compare against.
 - The download leg runs one `download` per distinct window, each with that window's polygons as ROI.
 - The build leg already writes `startdate`/`enddate` per `input.csv` row, and each window has its own
   path segment, so it needs no change beyond being called once per distinct window.
@@ -133,6 +148,17 @@ CollectionInput(
   S1 input with `max_cloudcover` fails before the S2 download is paid for.
 - A collection may appear only once in `inputs`, and band names must be unique across inputs.
   Either violation raises.
+- (A1) **Callers never name bands; rise-eo does, when a collection is added.** Each built-in
+  collection module declares `BANDS`, its full list of rise-eo band names, next to D7's
+  `SHORT_NAME` (`s2l2a`: `config.S2L2A_ALL_BANDS`; `s1rtc`: `("vv", "vh")`). A test asserts that no
+  two built-in collections share a band name, so a clash fails CI the day the collection is added.
+  `docs/adding-a-source.md` states the rule. A new collection whose provider names clash with
+  existing ones (HLS's `B04`, `B8A`) maps them to new rise-eo names, chosen in that collection's
+  spec. The fusion-time check above stays as the safety net for collections a caller registers
+  with `register()`, and its error names both collections. Prior art: openEO and xarray also
+  refuse a clash rather than rename it (`merge_cubes` needs an `overlap_resolver`; `xarray.merge`
+  raises `MergeError`). Earth Engine's automatic `B04_1` renaming was rejected, because the new name
+  no longer says which satellite the band came from.
 - (A1) With one input, `create_training_data` and `run_inference` build and infer exactly as with
   the scalar arguments. `download(inputs=...)` always returns the dict, even with one input.
 
@@ -159,9 +185,12 @@ When `inputs` has more than one entry, each per-polygon or per-cell task builds 
    built onto another collection's grid gets `-on-<code>` in its path, and (A1) **`grid_from`**, the
    reference cube's full `params_key`, in its hash. It never collides with a standalone cube, and it
    moves whenever the reference cube's parameters change. The fused cube's metadata and
-   `params.json` list each component's collection, path and provenance.
-6. (A1) A fused build needs `mosaic_scheme="calendar"` on every input, or preflight raises: only
-   calendar windows give two collections the same `timestamps` axis.
+   `params.json` list each component's collection, path and provenance. (A1) The fused cube's metadata
+   and `lineage.json` (D8) also carry **`band_collections`**, a `{band: collection}` map in band order.
+6. (A1) Only calendar windows remain (D10), and they give two collections the same `timestamps`
+   axis. All inputs share one window and
+   one `mosaic_days`, so preflight knows their common window starts before any download. The join's
+   timestamp check (step 4) is a backstop, not the first place a mismatch is found.
 
 `flatten` and `feature_sequence` work on the fused cube unchanged: it is an ordinary
 `datacube.npy` + `metadata.pickle.npy`. With D1 and calendar windows on both inputs, the two
@@ -300,6 +329,19 @@ raises, naming the field and both values. For example, a model trained on both o
 served only `descending` fails before any job starts. A bundle saved without `training_data=` skips
 the check and says so once.
 
+### D10 — (A1) Remove `mosaic_scheme="acquisition"` (#147)
+
+`mosaic_scheme` accepts only `"calendar"`. Passing `"acquisition"` to any verb, runner or task CLI
+raises a `ValueError` that names `"calendar"` and says the legacy scheme was removed. The
+`"acquisition"` branch (`_get_mosaic_ts_index_ranges` and its call in `datacube/ops.py`) goes, and so
+do its tests and the two manual test notes. `LIMITATIONS.md` gets a row. The parameter itself stays,
+so a caller passing `"calendar"` explicitly is unaffected and `params_key` (which includes it) does
+not move.
+
+The maintainer decided this on 2026-10-09 (#145, Q3d). It lands here because the legacy scheme's
+windows depend on the data. With it, neither D1's monthly T nor D5's S2/S1 alignment could be known
+before download. Without it, both are pure functions of the parameters. Closes #147.
+
 ## Prior art
 
 - **D1:** openEO `aggregate_temporal_period` (openeo-processes 1.0.0, 2020-07-31) has
@@ -321,7 +363,14 @@ the check and says so once.
 - **D4:** STAC API item search takes `collections` as a list, matched as OR. That is a single request
   over several collections, which `inputs` mirrors at the verb level. The `CollectionInput` type
   itself is homemade: we found no pre-2022 library whose download call bundles per-collection
-  bands, filters and cloud cover in one value.
+  bands, filters and cloud cover in one value. (A1) Band-name clashes: every library we checked
+  that stacks satellites on one band axis either refuses a clash (openEO `merge_cubes` without an
+  `overlap_resolver`; `xarray.merge`), renames it automatically (Earth Engine `addBands`: `foo` →
+  `foo_1`), or does not check at all (TorchGeo's `concat_samples` stacks the channels, and its
+  samples carry no band names). rslearn avoids the question: each satellite stays a separately
+  named input, and its `Concatenate` transform selects bands by index. sits reads matching names as
+  more dates of the same band. D4 refuses, and moves the naming to the moment a collection is
+  added, so no caller ever has to choose a name.
 - **D5, D6:** openEO `resample_cube_spatial` ("Resample the spatial dimensions to match a target
   data cube", default `near`), then `merge_cubes` (cubes with different bands merge with no overlap
   resolver). Both are in openeo-processes 1.0.0 (2020). sits does the same: regularize each cube to
@@ -359,19 +408,24 @@ Tests (synthetic, in `tests/`):
   granules is an all-nodata slice.
 - **AC2:** two polygons with windows in 2018 and 2019 give one training set with T = 12 each and the
   right `window_starts.npy`. A full-year polygon plus a six-month polygon raises, naming both ids
-  under their T. Scalar dates plus date columns raises.
+  under their T. Scalar dates plus date columns raises. (A1) The T mismatch raises with
+  `download=True` before the download function is called, and with an empty catalog, which shows it
+  needs no catalog read and no download.
 - **AC3:** a catalog with both orbit states raises with no filter and with one value, builds with
   both values listed, and the two selections land at different paths. (A1) This is checked through
   the per-cube task the runners call (`workflows.task.run_task`), not only `build_datacube`, so the
   filter is shown to reach the node.
 - **AC4:** `download(inputs=[s2, s1])` writes two catalogs and returns both paths. An S1 input with
   `max_cloudcover` fails at preflight before the S2 download runs. A repeated collection or band name
-  raises.
+  raises. (A1) The built-in collections' `BANDS` are pairwise disjoint (a test that fails when a
+  collection with a clashing name is added). Fusing two caller-registered collections that share
+  a band name raises, naming the band and both collections.
 - **AC5:** an image with the reference's shape and a shifted transform is resampled. The fused
   cube's bands are in `inputs` order, its nodata is 0, and it is `float32` in the array and in its
   metadata. (A1) Mismatched timestamps, CRS or transform raise. The fused cube's path reads
   `s2l2a-s1rtc_20180101-20190101_P1M_<hash8>/<id>/`. Changing the S2 input's bands moves the S1
-  component's path (`grid_from`). A fused build with `mosaic_scheme="acquisition"` raises.
+  component's path (`grid_from`). (A1) Its metadata's `band_collections` maps each band, in band
+  order, to its collection.
 - **AC6:** for one cell geometry, the training path and the inference path produce byte-identical
   fused cubes.
 
@@ -380,8 +434,8 @@ Tests (synthetic, in `tests/`):
   Two requests that differ only in bands or `properties_filter` share the readable part and get
   different hashes. `params.json` round-trips every parameter. Registering a collection with
   `short_name="S2/x"` raises. A collection registered without `short_name` gets the fallback code,
-  and a second collection with the same code raises. `"month"` with `mosaic_scheme="acquisition"`
-  raises.
+  and a second collection with the same code raises. (D10) `mosaic_scheme="acquisition"` raises on
+  every verb and CLI that took it, naming `"calendar"`.
 - **AC10 (D8):** a synthetic fused training run writes `lineage.json`. Its `process_steps` are, in
   order, download, mask, resample, mosaic, fuse, flatten and features. Its `granule_ids` equal the
   catalog rows the cubes used, and its `statement` names both collections and T. An inference run
@@ -435,7 +489,7 @@ lineage records the fuse step.
 | Phase | Decisions | Size |
 |---|---|---|
 | P1 | D3 orbit opt-in | ~1 h |
-| P2 | D1 monthly windows, D7 readable cube paths | ~1 day |
+| P2 | D10 remove `"acquisition"` first, then D1 monthly windows and D7 short cube paths | ~1 day |
 | P3 | D2 per-polygon windows | half a day to a day |
 | P4 | D4 `CollectionInput`, multi-collection download | ~half a day |
 | P5 | D5 + D6 fused cube, training and inference; AC7 run-book on Azure ML | 1–2 days |
@@ -480,6 +534,14 @@ Each implementation PR updates `README.md`, `ARCHITECTURE.md`, `CONTEXT.md`, `RO
 - MPC STAC collections `sentinel-2-l2a` and `sentinel-1-rtc`: L2A's 12 spectral bands at
   10/20/60 m with no B10 (Problem); RTC `vv`/`vh` as float32, nodata −32768, 10 m, orthorectified to
   UTM and "not shifted to any specific grid" (Problem 5, D5).
+- (A1) Band-name clashes (D4): openEO `merge_cubes.json` and `rename_labels.json` (1.2.0), whose
+  example 2 says "An overlap resolver is *required* to resolve overlap in band `B2`"; xarray
+  `merge` docs (`MergeError`, `compat="override"`); Earth Engine `ee.Image.addBands` docs (the
+  numeric-suffix rename, and `overwrite`); sits `sits_merge` reference (same bands combine the
+  timelines, different bands combine the bands, anything else raises); TorchGeo `datasets/geo.py`
+  and `datasets/utils.py` on GitHub (`IntersectionDataset` defaults to `concat_samples`, which is
+  `torch.cat`, with no band-name check); rslearn's local docs (`ModelConfig.md` inputs,
+  `Transforms.md` `Concatenate`, `examples/OlmoEarthEmbeddings.md`).
 - STAC API item search (`collections` as a list, OR-matched), as described in NASA CMR's STAC OpenAPI
   docs and Element 84's Earth Search docs (D4).
 - Spec 58 D9, D11, D16 and its S1 download measurement (Problem 3, 5; Risks).
