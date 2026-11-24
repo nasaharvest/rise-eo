@@ -7,7 +7,7 @@ issue: "#214"
 # Spec 214 — fused Sentinel-2 + Sentinel-1 datacubes, monthly windows, per-polygon dates
 
 **Status:** **SIGNED OFF (user, 2026-11-23).**
-**Amendment A1 (2026-11-23, from the gate-3 review on #215), awaiting the user's sign-off.** No signed-off
+**Amendment A1 (2026-11-23, from the gate-3 review on #215): SIGNED OFF (user, 2026-11-24).** No signed-off
 decision changes direction. One decision is new: D10, from the maintainer's #147 decision. A1:
 - adds ADR 0035 (supersedes ADR 0029 in part) and ADR 0036 (supersedes ADR 0010 in part);
 - D1: the period is named as in D7;
@@ -18,7 +18,8 @@ decision changes direction. One decision is new: D10, from the maintainer's #147
 - D4: corrects the length-1 rule. Band names are fixed by rise-eo when a collection is added
   (`BANDS` per collection, plus a test that no two built-in collections share one); callers never
   name bands;
-- D5: the join also checks CRS and transform, and defines `grid_from` and the fused dtype;
+- D5: the join also checks CRS and transform, and defines `grid_from` and the fused dtype. The fused
+  cube's metadata and `lineage.json` carry `band_collections`;
 - D7: defines the `SHORT_NAME` fallback;
 - D8: states how paths are recorded;
 - the ACs now match the phases, and the S2 band count is worded consistently.
@@ -184,7 +185,8 @@ When `inputs` has more than one entry, each per-polygon or per-cell task builds 
    built onto another collection's grid gets `-on-<code>` in its path, and (A1) **`grid_from`**, the
    reference cube's full `params_key`, in its hash. It never collides with a standalone cube, and it
    moves whenever the reference cube's parameters change. The fused cube's metadata and
-   `params.json` list each component's collection, path and provenance.
+   `params.json` list each component's collection, path and provenance. (A1) The fused cube's metadata
+   and `lineage.json` (D8) also carry **`band_collections`**, a `{band: collection}` map in band order.
 6. (A1) Only calendar windows remain (D10), and they give two collections the same `timestamps`
    axis. All inputs share one window and
    one `mosaic_days`, so preflight knows their common window starts before any download. The join's
@@ -422,7 +424,8 @@ Tests (synthetic, in `tests/`):
   cube's bands are in `inputs` order, its nodata is 0, and it is `float32` in the array and in its
   metadata. (A1) Mismatched timestamps, CRS or transform raise. The fused cube's path reads
   `s2l2a-s1rtc_20180101-20190101_P1M_<hash8>/<id>/`. Changing the S2 input's bands moves the S1
-  component's path (`grid_from`).
+  component's path (`grid_from`). (A1) Its metadata's `band_collections` maps each band, in band
+  order, to its collection.
 - **AC6:** for one cell geometry, the training path and the inference path produce byte-identical
   fused cubes.
 
