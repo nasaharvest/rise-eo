@@ -1928,9 +1928,19 @@ def _run_inference_roi(
         errs += _check_catalog_collection_dir(catalog_filepath, collection)
     # Normalize dates HERE, before `compute_n_timestamps` or any dispatch: an unparseable
     # date must abort on the driver in milliseconds, not after a 40-380 s node cold-start.
+    window_ok = False
     if startdate is not None and enddate is not None:
         startdate, enddate, date_errs = _normalize_window(startdate, enddate)
         errs += date_errs
+        window_ok = not date_errs
+    # A bad `mosaic_days` (or a monthly one whose `startdate` is not a month start) is a
+    # preflight error, raised before the bundle is staged or any file is written.
+    days_ok = False
+    if window_ok and mosaic_days is not None:
+        try:
+            days_ok = _ops.check_mosaic_days(mosaic_days, startdate) is not None
+        except ValueError as exc:
+            errs.append(str(exc))
     # Canonicalize bands and the adapter's required_bands to native asset keys before
     # comparing -- one may be spelled canonically ("nir08"), the other natively ("B8A"), and
     # both must resolve to the same set for this check to mean anything.
@@ -1942,7 +1952,7 @@ def _run_inference_roi(
         missing = required - set(bands)
         if missing:
             errs.append(f"bands is missing model-required {sorted(missing)}.")
-    if want_t and None not in (startdate, enddate, mosaic_days):
+    if want_t and days_ok:
         got_t = compute_n_timestamps(startdate, enddate, mosaic_days)
         if got_t != want_t:
             errs.append(
