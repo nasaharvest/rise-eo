@@ -59,7 +59,8 @@ published `common_name` is not trusted.
 _Avoid_: band alias (that's the mapping, not the name), common band, band code.
 
 **Mosaic partition**:
-The catalog properties a Collection declares must hold a single value within one datacube build —
+The catalog properties a Collection declares must hold a single value within one datacube build, unless the
+caller lists several values of that key in `properties_filter` to mix them on purpose —
 `sentinel-1-rtc` declares `sat:orbit_state`, optical collections declare nothing. It exists because
 some products are harmonized for compositing and others are not.
 _Avoid_: orbit filter (that's the user-facing knob), grouping key.

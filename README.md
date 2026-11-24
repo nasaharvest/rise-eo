@@ -80,8 +80,10 @@ catalog = rise_eo.download(
   from metadata alone and stops if the ROI is bigger than you meant.
 - **Sentinel-1 RTC** uses the same call with `collection="sentinel-1-rtc"`, `bands=["vv", "vh"]` and
   `source="mpc"`, and without `max_cloudcover` (radar has no cloud cover, so it raises). S1 downloads
-  whole scenes, not MGRS granules. Ascending and descending passes are never mixed in one datacube:
-  when you build, pick one with `properties_filter={"sat:orbit_state": "ascending"}`.
+  whole scenes, not MGRS granules. Ascending and descending passes are not mixed in one datacube
+  by default: when you build, pick one with `properties_filter={"sat:orbit_state": "ascending"}`.
+  To median both on purpose, list both, `{"sat:orbit_state": ["ascending", "descending"]}`; the two
+  passes view a field from different sides and incidence angles, so that median mixes two geometries.
 
 ## 2. Build training data
 

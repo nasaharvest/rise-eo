@@ -148,6 +148,16 @@ def properties_filter_values(want) -> list[str]:
     return [str(v) for v in values]
 
 
+def mixed_filter_keys(
+    properties_filter: Mapping[str, str | Sequence[str]] | None,
+) -> set[str]:
+    """The keys `properties_filter` lists with more than one value: the caller named the
+    values to mix on purpose, so a partitioned key among them is exempt from the
+    single-value check (spec 214 D3)."""
+    return {k for k, v in (properties_filter or {}).items()
+            if len(properties_filter_values(v)) > 1}
+
+
 def filter_by_properties(
     gdf: gpd.GeoDataFrame,
     properties_filter: Mapping[str, str | Sequence[str]] | None,

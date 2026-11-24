@@ -124,7 +124,7 @@ first (`rise_eo.collections.get(id)`). Four things break when a sentinel-2-l2a r
 2. **`max_cloudcover` raises** on a collection that declares `supports_cloud_cover=False`. Pass
    `None`.
 3. **`properties_filter` is required** when the declaration sets `mosaic_partition` with
-   `partition_policy="raise"` (S1: one `sat:orbit_state` per window).
+   `partition_policy="raise"` (S1: one `sat:orbit_state` per window, or both listed to opt in to a mixed median).
 4. **The feature sequence may stop making sense.** `rise_eo.bands.modify.compute_bands` knows only
    optical indices (NDVI, SAVI, … on B02–B12) and raises when their bands are missing. The silent
    ones are `scale_bands` and `mask_invalid_and_interpolate` given a band list: they act only on

@@ -39,7 +39,8 @@ DECLARATION = CollectionDeclaration(
     requires_subscription_key=False,
     # Gated by D6; AC14 -- SAR has no cloud-cover concept at all.
     supports_cloud_cover=False,
-    # D9: ascending/descending backscatter must never be medianed together.
+    # D9: ascending/descending backscatter is not medianed together by default; a caller
+    # may opt in by listing both orbit states in `properties_filter` (ADR 0035).
     mosaic_partition=("sat:orbit_state",),
     partition_policy="raise",
 )

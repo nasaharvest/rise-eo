@@ -482,8 +482,10 @@ def download(
     `properties_filter` narrows the discovered granules by STAC property, e.g.
     `{"sat:orbit_state": "descending"}`, **before** the `max_tiles` cap, so the cap counts
     what will be transferred: a transfer is a whole-asset byte copy, and a partitioned
-    collection like `sentinel-1-rtc` returns orbits a build can never use. A key no
-    discovered granule carries raises, naming the keys they do carry.
+    collection like `sentinel-1-rtc` returns orbits a build never uses by default. Listing both
+    orbit states, `{"sat:orbit_state": ["ascending", "descending"]}`, opts in to a mixed
+    median (two viewing geometries in one median) and downloads both. A key no discovered
+    granule carries raises, naming the keys they do carry.
 
     Spec: 59 D7, 58 D9.
     """
@@ -603,7 +605,8 @@ def discover_shard_rows(
     facts, not the build's collection-variant resolution that spec 58 D13 keeps
     registry-free.
 
-    `properties_filter` narrows the granules as in `download()`, before any row exists, so
+    `properties_filter` narrows the granules as in `download()` (including the opt-in to both
+    orbit states), before any row exists, so
     `max_tiles` downstream counts only what will transfer. `processing` is applied here, on
     the driver, per acquisition, so the shard CSVs carry only the chosen processing and no
     node decides.

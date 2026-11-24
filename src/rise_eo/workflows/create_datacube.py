@@ -12,6 +12,7 @@ the shape-centric workflow TODO #15 will later optimize.
 from __future__ import annotations
 
 import concurrent.futures
+import dataclasses
 import datetime
 import hashlib
 import json
@@ -31,6 +32,7 @@ from rise_eo.catalog.catalog import (
     TileCatalog,
     filter_by_properties,
     filter_gdf,
+    mixed_filter_keys,
     properties_filter_values,
 )
 from rise_eo.catalog.declaration import CollectionDeclaration
@@ -267,7 +269,9 @@ def setup(
 
     `properties_filter` narrows the catalog to rows matching every given STAC property BEFORE
     the per-shape slice. A key no row carries raises (`catalog.filter_by_properties`), naming
-    the keys it does carry, rather than silently slicing to zero rows. The canonicalized
+    the keys it does carry, rather than silently slicing to zero rows. Listing several values of
+    a partitioned key (both `sat:orbit_state`s) opts in to mixing them in one median, at the
+    cost of two viewing geometries in it. The canonicalized
     selection is folded into `window_segment` (via `params_key`) and recorded on every
     `input.csv` row, so a differently-filtered re-run never collides on content identity.
 
@@ -324,8 +328,16 @@ def setup(
     declaration_filepath = os.path.join(
         run_folderpath, window_segment, DECLARATION_FILENAME)
     fs.makedirs(os.path.join(run_folderpath, window_segment))
+    # The control file is BUILD policy for the nodes: a partition key the caller listed with
+    # several values is dropped from `mosaic_partition` so `run_task` builds the mix. Paths
+    # (`window_segment` above) keep the ORIGINAL declaration's digest.
+    mixed = mixed_filter_keys(properties_filter)
+    written = dataclasses.replace(
+        declaration,
+        mosaic_partition=tuple(k for k in declaration.mosaic_partition if k not in mixed),
+    )
     fs.write_text(declaration_filepath,
-                  json.dumps(declaration_module.to_json(declaration)))
+                  json.dumps(declaration_module.to_json(written)))
 
     n_shapes = len(shapes_gdf)
     print(f"[setup] catalog read once: {len(catalog_gdf)} rows, for {n_shapes} shapes",
