@@ -38,6 +38,18 @@ decision changes direction. A2:
 - AC7 counts valid S1 pixels equal to 0.0 in the S1 component cube, whose nodata is −32768;
 - Out of scope: `verify_adapter(inputs=...)`, filed as #231.
 
+**Amendment A3 (2026-11-25, from checking D8/D9 against the code before P6): SIGNED OFF (user,
+2026-11-25).** The two answers below are the maintainer's (2026-11-25). No signed-off
+decision changes direction. A3:
+- D8 code: each cube records the rise-eo version and commit of the process that built it, and
+  `lineage.json` holds both `code.driver` (where the verb was called) and `code.build` (every
+  distinct version and commit the cubes were built with);
+- D8/D9 with pre-built cubes (`run_inference(inference_datacubes=...)`): `lineage.json` holds the
+  cube paths, the model and the `predict` step, and the D9 check is skipped with one printed line;
+- D8: a training set with no `lineage.json` is not finished, so its next run redoes the flatten
+  step (the cubes are reused);
+- AC10 and AC11 gain the matching tests.
+
 ## Problem
 
 A model whose adapter we need to write takes, per pixel:
@@ -319,7 +331,12 @@ Its shape follows ISO 19115's lineage model, sources plus ordered process steps:
 - The inference STAC Collection and Items get `processing:software` and `processing:lineage` (the
   statement), and the Collection links to `lineage.json` as an asset with role `metadata`.
 - `lineage.json` only describes. The skip-or-redo decision stays with `_flatten_stamp.json`, which
-  records identity, not description.
+  records identity, not description. (A3) It is still an output: a training set without it is not
+  finished, so its next run redoes the flatten step and reuses the cubes. There is no shim for
+  training sets built before it (repo rule).
+- (A3) **Pre-built cubes.** `run_inference(inference_datacubes=...)` has no request naming
+  collections or a window. Its `lineage.json` holds the cube paths, the model (bundle path or
+  registry ref, plus digest) and the `predict` step.
 
 **Enough to recreate the data later.** A later feature (out of scope) should be able to rebuild a
 deleted training set or inference output from `lineage.json` alone, provided the provider still
@@ -339,7 +356,11 @@ serves the granules. So the file also holds:
   `geometry.geojson`, with their sha256 recorded. A path alone can't recover a deleted or edited file.
   A 900-field training set's geometry is a few MB.
 - **Code**: rise-eo's version and, for a git install, the commit and whether the tree had
-  uncommitted changes. For each feature function, its `module.qualname` *and* a sha256 of its
+  uncommitted changes. (A3) Recorded twice, because with `runner="aml"` the driver and the AML
+  image can hold different commits: `code.driver` for the process that called the verb, and
+  `code.build` for the code that built the cubes. Each cube's metadata records its builder's
+  version and commit (for an install from a git ref, the commit pip recorded); `flatten` collects
+  them, and `code.build` lists every distinct pair, so a run resumed across two images lists both. For each feature function, its `module.qualname` *and* a sha256 of its
   source, so an edited body shows. For inference, the bundle digest.
 - **Libraries**: versions of Python, numpy, pandas, geopandas, rasterio, GDAL, pyproj, numba and
   fsspec.
@@ -356,7 +377,8 @@ At inference, preflight compares the bundle's training lineage with the inferenc
 collections in order, each one's bands and `properties_filter`, the period and T. A difference
 raises, naming the field and both values. For example, a model trained on both orbit states but
 served only `descending` fails before any job starts. A bundle saved without `training_data=` skips
-the check and says so once.
+the check and says so once. (A3) So does inference on pre-built cubes (`inference_datacubes=`):
+there is no request to compare, and the printed line says so.
 
 ### D10 — (A1) Remove `mosaic_scheme="acquisition"` (#147)
 
@@ -476,11 +498,16 @@ Tests (synthetic, in `tests/`):
   `request`, re-run with only the output folder changed, gives byte-identical arrays on a
   single-MGRS-tile fixture. (A1) It contains no credential and no `runner_kwargs` value. Its paths
   are recorded as given. `geometry.geojson` matches its recorded sha256. Editing a feature function's body changes
-  its recorded source hash.
+  its recorded source hash. (A3) A cube's metadata records its builder's rise-eo version and
+  commit; with two cubes built at different commits, `code.build` lists both and `code.driver`
+  names the caller's. A training set whose `lineage.json` was deleted re-flattens on the next run
+  without rebuilding a cube. Inference on pre-built cubes writes `lineage.json` with the cube
+  paths and a `predict` step.
 - **AC11 (D9):** a bundle saved with `training_data=` holds the training `lineage.json`. Inference
   with the same inputs passes. Inference with `properties_filter={"sat:orbit_state": "descending"}`
   against a both-orbits training set raises, naming `properties_filter` and both values. A bundle
-  without training lineage prints one line and runs.
+  without training lineage prints one line and runs. (A3) Inference on pre-built cubes with a
+  bundle that has training lineage prints one line and runs.
 
 Real runs (gate 4) run **on Azure ML only**. (A1) P5's run-book holds AC7, and P6 extends the same
 run-book with AC8, since AC8 reads D8's lineage. The archive is on blob, and the
