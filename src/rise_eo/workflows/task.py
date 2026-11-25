@@ -27,6 +27,8 @@ import pandas as pd
 from rise_eo import config
 from rise_eo.catalog import declaration as declaration_module
 from rise_eo.datacube import builder, ops
+from rise_eo.datacube.files import CUBE_METADATA_NAME, CUBE_NAME
+from rise_eo.datacube.join import join_cubes
 from rise_eo.storage import fs
 
 
@@ -46,6 +48,8 @@ def run_task(
     njobs_load_images: int = 1,
     write_timings: bool = False,
     write_read_log: bool = False,
+    reference_profile: dict | None = None,
+    fusion_filepath: str | None = None,
 ) -> None:
     """Build one datacube from a setup work-unit and save it to export_folderpath.
 
@@ -71,11 +75,25 @@ def run_task(
     returns immediately -- the resume signal is the artifact's own existence, not a sentinel,
     so a re-dispatched (recovery-retried) shard skips every cube it already finished.
 
-    Spec: 58 D13, D14.
+    `reference_profile` builds the cube onto another cube's grid (`build_datacube`).
+    `fusion_filepath` names the `fusion.json` control file of a fused unit: each component is
+    built into its own folder (the first as usual, the others onto the first's grid, read from
+    its cube metadata, so a resumed unit reuses finished components), then joined into
+    `export_folderpath`.
+
+    Spec: 58 D13, D14; 214 D5.
     """
     ops.check_mosaic_scheme(mosaic_scheme)
     ops.check_mosaic_days(mosaic_days, startdate)
-    if fs.exists(os.path.join(export_folderpath, "datacube.npy")):
+    if fs.exists(os.path.join(export_folderpath, CUBE_NAME)):
+        return
+    if fusion_filepath is not None:
+        _run_fused(
+            fusion_filepath, startdate, enddate, export_folderpath, mosaic_days=mosaic_days,
+            mosaic_scheme=mosaic_scheme, if_missing_files=if_missing_files, njobs=njobs,
+            njobs_load_images=njobs_load_images, write_timings=write_timings,
+            write_read_log=write_read_log,
+        )
         return
 
     with fs.open(declaration_filepath, "r") as f:
@@ -103,7 +121,44 @@ def run_task(
         if_missing_files=if_missing_files,
         write_timings=write_timings,
         write_read_log=write_read_log,
+        reference_profile=reference_profile,
     )
+
+
+def _run_fused(fusion_filepath, startdate, enddate, export_folderpath, *, mosaic_days,
+               mosaic_scheme, if_missing_files, njobs, njobs_load_images, write_timings,
+               write_read_log) -> None:
+    """Build each component of a fused unit, then join them into `export_folderpath`."""
+    with fs.open(fusion_filepath, "r") as f:
+        components = json.load(f)["components"]
+    reference_profile = None
+    for component in components:
+        run_task(
+            component["shapefilepath"], component["catalog_filepath"], startdate, enddate,
+            component["export_folderpath"], bands=component["bands"], mosaic_days=mosaic_days,
+            declaration_filepath=component["declaration_filepath"], mosaic_scheme=mosaic_scheme,
+            if_missing_files=if_missing_files, njobs=njobs, njobs_load_images=njobs_load_images,
+            write_timings=write_timings, write_read_log=write_read_log,
+            reference_profile=reference_profile,
+        )
+        if reference_profile is None:
+            reference_profile = _load_cube(component["export_folderpath"])[1]["geotiff_metadata"]
+    cubes = [_load_cube(c["export_folderpath"]) for c in components]
+    fused, metadata = join_cubes(
+        cubes, collections=[c["collection"] for c in components],
+        paths=[c["export_folderpath"] for c in components],
+    )
+    fs.makedirs(export_folderpath)
+    # Metadata first, cube last: `datacube.npy` is the resume signal (see `build_datacube`).
+    builder._save_npy_atomic(os.path.join(export_folderpath, CUBE_METADATA_NAME), metadata,
+                             allow_pickle=True)
+    builder._save_npy_atomic(os.path.join(export_folderpath, CUBE_NAME), fused)
+
+
+def _load_cube(folderpath: str):
+    """`(datacube, metadata)` of the cube in `folderpath`."""
+    return (fs.load_npy(os.path.join(folderpath, CUBE_NAME)),
+            fs.load_npy(os.path.join(folderpath, CUBE_METADATA_NAME), allow_pickle=True)[()])
 
 
 def _parse_args(argv=None) -> argparse.Namespace:
@@ -123,6 +178,9 @@ def _parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("--declaration-filepath", required=True,
                    help="control file written by setup(): the resolved "
                         "CollectionDeclaration as JSON (spec 58 D13)")
+    p.add_argument("--fusion-filepath",
+                   help="control file of a fused unit (written by setup()): the components "
+                        "to build onto one grid and join; --bands is then unused")
     p.add_argument("--if-missing-files", default="warn",
                    choices=["raise_error", "warn", "none"])
     p.add_argument("--njobs", type=int, default=1)
@@ -142,6 +200,7 @@ def main(argv=None) -> None:
         mosaic_days=args.mosaic_days,
         mosaic_scheme=args.mosaic_scheme,
         declaration_filepath=args.declaration_filepath,
+        fusion_filepath=args.fusion_filepath,
         if_missing_files=None if args.if_missing_files == "none" else args.if_missing_files,
         njobs=args.njobs,
         njobs_load_images=args.njobs_load_images,

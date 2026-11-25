@@ -128,6 +128,7 @@ def params_key(
     bands: list[str], mosaic_scheme: str, *, collection: str, declaration: CollectionDeclaration,
     properties_filter: Mapping[str, str | Sequence[str]] | None = None,
     processing: str | None = None,
+    grid_from: str | None = None,
 ) -> str:
     """A short digest of the params EVERY cell in a run shares -- never the set of ids.
 
@@ -143,7 +144,9 @@ def params_key(
     `properties_filter` and `processing` are appended ONLY when set, so an empty one
     contributes NOTHING (not even an empty component) and a build that does not use them
     keeps its cube path, while two builds differing only in `processing` never share a cube;
-    `processing=` is namespaced so it never collides with a filter.
+    `processing=` is namespaced so it never collides with a filter. `grid_from` (the full
+    segment of the cube whose grid this one is built onto) is appended only when set, so a
+    component never shares a path with a standalone cube and moves with its reference.
 
     Same string form `setup` writes to `input.csv`, so a digest from a read-back row agrees.
 
@@ -156,6 +159,8 @@ def params_key(
         parts.append(selection)
     if processing is not None:
         parts.append("processing=" + _canonicalize_processing(processing))
+    if grid_from is not None:
+        parts.append("grid_from=" + grid_from)
     raw = "|".join(parts)
     return hashlib.sha1(raw.encode()).hexdigest()[:8]
 
@@ -165,10 +170,13 @@ def window_folder_segment(
     bands: list[str], mosaic_scheme: str, collection: str, declaration: CollectionDeclaration,
     properties_filter: Mapping[str, str | Sequence[str]] | None = None,
     processing: str | None = None,
+    grid_from: str | None = None,
 ) -> str:
     """The one run-folder segment shared by every cell of a request:
     `<collection code>_<startdate>-<enddate>_<period>_<params_key>`, e.g.
     `s2l2a_20180101-20190101_P1M_ab12cd34` (`P1M` for `"month"`, `P<n>D` for an `int`).
+    A cube built onto another cube's grid (`grid_from` = that cube's segment) reads
+    `s1rtc-on-s2l2a_...`.
 
     Callers that need to name an expected cube path WITHOUT running `setup` call this with
     the same arguments `setup` was given -- same inputs, same string, no catalog access.
@@ -176,14 +184,96 @@ def window_folder_segment(
     startdate = pd.to_datetime(startdate, utc=True)
     enddate = pd.to_datetime(enddate, utc=True)
     key = params_key(bands, mosaic_scheme, collection=collection, declaration=declaration,
-                     properties_filter=properties_filter, processing=processing)
+                     properties_filter=properties_filter, processing=processing,
+                     grid_from=grid_from)
     mosaic_days = ops.check_mosaic_days(mosaic_days, startdate)
     period = "P1M" if mosaic_days == ops.MONTH else f"P{mosaic_days}D"
     # The readable dates drop the time of day, so the hash also covers the full window.
     key = hashlib.sha1(f"{key}|{startdate.isoformat()}|{enddate.isoformat()}|{mosaic_days}".encode()
                        ).hexdigest()[:8]
-    return (f"{_collections.short_name_of(collection)}_{startdate.strftime('%Y%m%d')}-"
-            f"{enddate.strftime('%Y%m%d')}_{period}_{key}")
+    code = _collections.short_name_of(collection)
+    if grid_from is not None:
+        code += "-on-" + grid_from.split("_")[0]
+    return f"{code}_{startdate.strftime('%Y%m%d')}-{enddate.strftime('%Y%m%d')}_{period}_{key}"
+
+
+@dataclasses.dataclass(frozen=True)
+class Component:
+    """One collection of a fused request: its native `bands`, catalog and selection."""
+
+    collection: str
+    bands: tuple[str, ...]
+    catalog_filepath: str
+    properties_filter: Mapping[str, str | Sequence[str]] | None = None
+    processing: str | None = None
+
+
+def component_segments(
+    startdate, enddate, mosaic_days, components: Sequence[Component], *, mosaic_scheme: str,
+) -> list[str]:
+    """Each component's own segment: the first is standalone, the others are built onto the
+    first's grid (`grid_from` = its full segment)."""
+    segments: list[str] = []
+    for c in components:
+        segments.append(window_folder_segment(
+            startdate, enddate, mosaic_days, bands=list(c.bands), mosaic_scheme=mosaic_scheme,
+            collection=c.collection, declaration=_collections.get(c.collection),
+            properties_filter=c.properties_filter, processing=c.processing,
+            grid_from=segments[0] if segments else None,
+        ))
+    return segments
+
+
+def fused_folder_segment(
+    startdate, enddate, mosaic_days, components: Sequence[Component], *, mosaic_scheme: str,
+) -> str:
+    """The fused cube's segment: the collection codes joined with `-`, the first component's
+    window and period, then a digest of every component's segment."""
+    segments = component_segments(startdate, enddate, mosaic_days, components,
+                                  mosaic_scheme=mosaic_scheme)
+    codes = "-".join(_collections.short_name_of(c.collection) for c in components)
+    _, window, period, _ = segments[0].split("_")
+    key = hashlib.sha1(("fused|" + "|".join(segments)).encode()).hexdigest()[:8]
+    return f"{codes}_{window}_{period}_{key}"
+
+
+def request_segment(
+    startdate, enddate, mosaic_days, *, bands: list[str], mosaic_scheme: str, collection: str,
+    properties_filter: Mapping[str, str | Sequence[str]] | None = None,
+    processing: str | None = None, components: Sequence[Component] | None = None,
+) -> str:
+    """The segment a request's cubes live under: the fused one when `components` is given,
+    else `window_folder_segment`."""
+    if components:
+        return fused_folder_segment(startdate, enddate, mosaic_days, components,
+                                    mosaic_scheme=mosaic_scheme)
+    return window_folder_segment(
+        startdate, enddate, mosaic_days, bands=bands, mosaic_scheme=mosaic_scheme,
+        collection=collection, declaration=_collections.get(collection),
+        properties_filter=properties_filter, processing=processing,
+    )
+
+
+def identity_columns(
+    *, collection: str, bands: Sequence[str],
+    properties_filter: Mapping[str, str | Sequence[str]] | None,
+    processing: str | None, components: Sequence[Component] | None = None,
+) -> dict[str, str]:
+    """The four `input.csv` request columns as canonical strings; a fused request joins its
+    components' values (`+` for collections, `|` for the per-component selections)."""
+    if components:
+        return {
+            "collection": "+".join(c.collection for c in components),
+            "bands": ",".join(b for c in components for b in c.bands),
+            "properties_filter": "|".join(
+                _canonicalize_properties_filter(c.properties_filter) for c in components),
+            "processing": "|".join(_canonicalize_processing(c.processing) for c in components),
+        }
+    return {
+        "collection": collection, "bands": ",".join(bands),
+        "properties_filter": _canonicalize_properties_filter(properties_filter),
+        "processing": _canonicalize_processing(processing),
+    }
 
 
 def cube_export_folderpath(run_folderpath: str, window_segment: str, id_value) -> str:
@@ -224,6 +314,7 @@ def _append_input_rows(
     rows: list[dict], csv_filepath: str, *, mosaic_days: int | str, mosaic_scheme: str,
     collection: str, bands: list[str],
     properties_filter: Mapping[str, str | Sequence[str]] | None, processing: str | None,
+    components: Sequence[Component] | None = None,
 ) -> None:
     """Stamp `rows` with the request's parameters, append them after any rows already in
     `csv_filepath`, dedupe on unit identity and write the file."""
@@ -231,10 +322,11 @@ def _append_input_rows(
     input_df["added_on"] = pd.Timestamp.now(tz="UTC")
     input_df["mosaic_days"] = mosaic_days
     input_df["mosaic_scheme"] = mosaic_scheme
-    input_df["collection"] = collection
-    input_df["bands"] = ",".join(bands)
-    input_df["properties_filter"] = _canonicalize_properties_filter(properties_filter)
-    input_df["processing"] = _canonicalize_processing(processing)
+    for column, value in identity_columns(
+        collection=collection, bands=bands, properties_filter=properties_filter,
+        processing=processing, components=components,
+    ).items():
+        input_df[column] = value
 
     if fs.exists(csv_filepath):
         with fs.open(csv_filepath, "r") as f:
@@ -261,8 +353,16 @@ def setup(
     collection: str = config.SATELLITE_S2L2A,
     properties_filter: Mapping[str, str | Sequence[str]] | None = None,
     processing: str | None = None,
+    grid_from: str | None = None,
+    components: Sequence[Component] | None = None,
 ) -> None:
     """Per geometry: write geometry.geojson + catalog.parquet slice + input.csv row.
+
+    With `components` (a fused request) `setup` runs once per component, each under its own
+    segment, then writes one `input.csv` row per shape every component has imagery for, with a
+    `fusion.json` listing the components' control files; `collection`, `bands`,
+    `properties_filter`, `processing` and `catalog_filepath` are then the first component's.
+    `grid_from` is the segment of the cube this one is built onto (see `window_folder_segment`).
 
     Reads the catalog **once**, then reuses `catalog.filter_gdf` for each shape's date+overlap
     slice (which also persists `area_contribution`); shapes with no intersecting granules are
@@ -309,6 +409,14 @@ def setup(
     startdate = pd.to_datetime(startdate, utc=True)
     enddate = pd.to_datetime(enddate, utc=True)
     mosaic_days = ops.check_mosaic_days(mosaic_days, startdate)
+    if components:
+        return _setup_fused(
+            components, shapefilepath=shapefilepath, id_col=id_col,
+            run_folderpath=run_folderpath, startdate=startdate, enddate=enddate,
+            mosaic_days=mosaic_days, csv_filepath=csv_filepath, label_col=label_col,
+            mosaic_scheme=mosaic_scheme, max_concurrent=max_concurrent,
+            timestamp_col=timestamp_col,
+        )
     declaration = _collections.get(collection)
     # Canonicalize bands to native asset keys as early as possible: every
     # downstream use of `bands` -- the digest, `input.csv`, the builder's catalog-band
@@ -335,7 +443,7 @@ def setup(
                                             bands=bands, mosaic_scheme=mosaic_scheme,
                                             collection=collection, declaration=declaration,
                                             properties_filter=properties_filter,
-                                            processing=processing)
+                                            processing=processing, grid_from=grid_from)
 
     # The declaration control file -- written under the WINDOW segment, not the run-folder
     # root. One run folder holds many windows and many collections: `_UNIT_IDENTITY_COLS`
@@ -370,6 +478,7 @@ def setup(
             for k in sorted(properties_filter or {})
         },
         "processing": processing,
+        "grid_from": grid_from,
         "declaration": declaration_module.to_json(declaration),
     }, indent=2))
 
@@ -473,6 +582,112 @@ def setup(
         rows, csv_filepath, mosaic_days=mosaic_days, mosaic_scheme=mosaic_scheme,
         collection=collection, bands=bands, properties_filter=properties_filter,
         processing=processing,
+    )
+
+
+FUSION_FILENAME = "fusion.json"
+
+
+def _setup_fused(
+    components: Sequence[Component], *, timestamp_col: str, shapefilepath: str, id_col: str,
+    run_folderpath: str, startdate, enddate, mosaic_days: int | str, csv_filepath: str,
+    label_col: str | None, mosaic_scheme: str, max_concurrent: int,
+) -> None:
+    """`setup` for a fused request: set up every component under its own segment, then one
+    `input.csv` row (and one `fusion.json`) per shape that every component has imagery for.
+
+    A shape any component has no imagery for in the window gets no row, and the line says which
+    collection had none; the caller records it known-empty under the fused segment.
+    Raises `NoWorkUnitsError` when no shape has imagery in every component.
+    """
+    segments = component_segments(startdate, enddate, mosaic_days, components,
+                                  mosaic_scheme=mosaic_scheme)
+    fused_segment = fused_folder_segment(startdate, enddate, mosaic_days, components,
+                                         mosaic_scheme=mosaic_scheme)
+    shapes_gdf = fs.read_geo(shapefilepath)
+    _refuse_duplicate_ids(shapes_gdf, id_col)
+
+    rows_by_component: list[dict[str, pd.Series]] = []
+    for k, (c, segment) in enumerate(zip(components, segments)):
+        component_csv = os.path.join(run_folderpath, segment, "input.csv")
+        if fs.exists(component_csv):
+            fs.rm(component_csv)
+        try:
+            setup(
+                catalog_filepath=c.catalog_filepath, timestamp_col=timestamp_col,
+                shapefilepath=shapefilepath, id_col=id_col, run_folderpath=run_folderpath,
+                startdate=startdate, enddate=enddate, bands=list(c.bands),
+                mosaic_days=mosaic_days, csv_filepath=component_csv, label_col=label_col,
+                mosaic_scheme=mosaic_scheme, max_concurrent=max_concurrent,
+                collection=c.collection, properties_filter=c.properties_filter,
+                processing=c.processing, grid_from=segments[0] if k else None,
+            )
+        except NoWorkUnitsError:
+            rows_by_component.append({})
+            continue
+        with fs.open(component_csv, "r") as f:
+            component_df = read_unit_csv(f)
+        rows_by_component.append({str(r[COL_ID]): r for _, r in component_df.iterrows()})
+
+    fs.makedirs(os.path.join(run_folderpath, fused_segment))
+    fs.write_text(os.path.join(run_folderpath, fused_segment, PARAMS_FILENAME), json.dumps({
+        "startdate": str(startdate), "enddate": str(enddate), "mosaic_days": mosaic_days,
+        "mosaic_scheme": mosaic_scheme,
+        "components": [{
+            "collection": c.collection, "segment": segment, "bands": list(c.bands),
+            "properties_filter": {
+                key: sorted(properties_filter_values(c.properties_filter[key]))
+                for key in sorted(c.properties_filter or {})
+            },
+            "processing": c.processing,
+        } for c, segment in zip(components, segments)],
+    }, indent=2))
+
+    def _prepare(srow) -> dict | None:
+        id_value = str(srow[id_col])
+        for c, rows in zip(components, rows_by_component):
+            if id_value not in rows:
+                print(f"[setup] skip id={id_value}: no {c.collection} imagery in the window "
+                      "-- the fused unit is skipped", flush=True)
+                return None
+        export_folderpath = cube_export_folderpath(run_folderpath, fused_segment, id_value)
+        fs.makedirs(export_folderpath)
+        fusion_filepath = os.path.join(export_folderpath, FUSION_FILENAME)
+        fs.write_text(fusion_filepath, json.dumps({"components": [{
+            "collection": c.collection, "bands": list(c.bands),
+            "shapefilepath": str(rows[id_value]["shapefilepath"]),
+            "catalog_filepath": str(rows[id_value]["catalog_filepath"]),
+            "declaration_filepath": str(rows[id_value]["declaration_filepath"]),
+            "export_folderpath": str(rows[id_value]["export_folderpath"]),
+        } for c, rows in zip(components, rows_by_component)]}, indent=2))
+        first = rows_by_component[0][id_value]
+        row = {
+            "shapefilepath": str(first["shapefilepath"]),
+            "startdate": startdate,
+            "enddate": enddate,
+            "catalog_filepath": str(first["catalog_filepath"]),
+            "export_folderpath": export_folderpath,
+            "datacube_filepath": os.path.join(export_folderpath, CUBE_NAME),
+            "images_count": int(sum(rows[id_value]["images_count"]
+                                    for rows in rows_by_component)),
+            "declaration_filepath": str(first["declaration_filepath"]),
+            "fusion_filepath": fusion_filepath,
+            COL_ID: srow[id_col],
+        }
+        if label_col is not None:
+            row[COL_LABEL] = srow[label_col]
+        return row
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_concurrent) as pool:
+        prepared = list(pool.map(_prepare, (srow for _, srow in shapes_gdf.iterrows())))
+    rows = [r for r in prepared if r is not None]
+    if not rows:
+        raise NoWorkUnitsError(
+            "setup produced no fused work-units (no shape had imagery in every collection).")
+    _append_input_rows(
+        rows, csv_filepath, mosaic_days=mosaic_days, mosaic_scheme=mosaic_scheme,
+        collection=components[0].collection, bands=list(components[0].bands),
+        properties_filter=None, processing=None, components=components,
     )
 
 
@@ -630,7 +845,7 @@ def _row_matches_window(
     row, *, bands: list[str], mosaic_days: int | str, startdate, enddate,
     mosaic_scheme: str, collection: str,
     properties_filter: Mapping[str, str | Sequence[str]] | None = None,
-    processing: str | None = None,
+    processing: str | None = None, components: Sequence[Component] | None = None,
 ) -> bool:
     """Does an existing `input.csv` row belong to THIS request's window/params? Same
     canonicalization `_dedupe_on_unit_identity` uses (dates -> comparable ISO strings)
@@ -643,14 +858,12 @@ def _row_matches_window(
     orbit's row.
     """
     want = {
-        "bands": ",".join(bands),
         "mosaic_days": str(mosaic_days),
         "startdate": str(pd.to_datetime(startdate, utc=True)),
         "enddate": str(pd.to_datetime(enddate, utc=True)),
         "mosaic_scheme": mosaic_scheme,
-        "collection": collection,
-        "properties_filter": _canonicalize_properties_filter(properties_filter),
-        "processing": _canonicalize_processing(processing),
+        **identity_columns(collection=collection, bands=bands, properties_filter=properties_filter,
+                           processing=processing, components=components),
     }
     for col, want_val in want.items():
         if col not in row.index:
@@ -799,6 +1012,7 @@ def build_shortfall_only(
     collection: str = config.SATELLITE_S2L2A,
     properties_filter: Mapping[str, str | Sequence[str]] | None = None,
     processing: str | None = None,
+    components: Sequence[Component] | None = None,
 ) -> tuple[int, int, int]:
     """The build leg of the backward walk: call `setup` only for the shapes that need it.
 
@@ -817,10 +1031,10 @@ def build_shortfall_only(
     declaration = _collections.get(collection)
     bands = [declaration.canonical_to_native(b) for b in bands]
     shapes_gdf = fs.read_geo(shapefilepath)
-    window_segment = window_folder_segment(
+    window_segment = request_segment(
         startdate, enddate, mosaic_days, bands=bands, mosaic_scheme=mosaic_scheme,
-        collection=collection, declaration=declaration, properties_filter=properties_filter,
-        processing=processing,
+        collection=collection, properties_filter=properties_filter, processing=processing,
+        components=components,
     )
     known_empty = _read_known_empty(run_folderpath, window_segment)
 
@@ -829,7 +1043,7 @@ def build_shortfall_only(
             row, bands=bands, mosaic_days=mosaic_days, startdate=startdate,
             enddate=enddate, mosaic_scheme=mosaic_scheme,
             collection=collection, properties_filter=properties_filter,
-            processing=processing,
+            processing=processing, components=components,
         ) and _row_matches_path(
             row, run_folderpath=run_folderpath, window_segment=window_segment,
         ),
@@ -907,6 +1121,7 @@ def build_shortfall_only(
                 csv_filepath=csv_filepath, label_col=label_col, mosaic_scheme=mosaic_scheme,
                 max_concurrent=max_concurrent, collection=collection,
                 properties_filter=properties_filter, processing=processing,
+                components=components,
             )
         except NoWorkUnitsError:
             # `setup` raises when NONE of the shapes it was handed have granules in range.
@@ -987,7 +1202,7 @@ def _force_rebuild(csv_filepath: str) -> None:
 def _prepare_input_csv(
     *, catalog_filepath, timestamp_col, shapefilepath, id_col, run_folderpath, startdate,
     enddate, bands, mosaic_days, csv_filepath, label_col, mosaic_scheme, overwrite_setup_csv,
-    collection, properties_filter, processing,
+    collection, properties_filter, processing, components=None,
 ) -> None:
     """Write `csv_filepath` for ONE window: regenerate it (`overwrite_setup_csv`) or grow it
     by the missing shapes only."""
@@ -1001,7 +1216,7 @@ def _prepare_input_csv(
             mosaic_days=mosaic_days,
             csv_filepath=csv_filepath, label_col=label_col, mosaic_scheme=mosaic_scheme,
             collection=collection, properties_filter=properties_filter,
-            processing=processing,
+            processing=processing, components=components,
         )
         # This pass just re-derived every shape straight from the catalog, so any
         # known-empty record for this window is superseded by what `input.csv` now
@@ -1010,12 +1225,10 @@ def _prepare_input_csv(
         # `input.csv` disagreeing.
         _clear_known_empty(
             run_folderpath,
-            window_folder_segment(startdate, enddate, mosaic_days, bands=bands,
-                                  mosaic_scheme=mosaic_scheme,
-                                  collection=collection,
-                                  declaration=_collections.get(collection),
-                                  properties_filter=properties_filter,
-                                  processing=processing),
+            request_segment(startdate, enddate, mosaic_days, bands=bands,
+                            mosaic_scheme=mosaic_scheme, collection=collection,
+                            properties_filter=properties_filter, processing=processing,
+                            components=components),
         )
     else:
         build_shortfall_only(
@@ -1025,7 +1238,7 @@ def _prepare_input_csv(
             mosaic_days=mosaic_days,
             csv_filepath=csv_filepath, label_col=label_col, mosaic_scheme=mosaic_scheme,
             collection=collection, properties_filter=properties_filter,
-            processing=processing,
+            processing=processing, components=components,
         )
 
 
@@ -1077,6 +1290,7 @@ def run_create_datacube(
     collection: str = config.SATELLITE_S2L2A,
     properties_filter: Mapping[str, str | Sequence[str]] | None = None,
     processing: str | None = None,
+    components: Sequence[Component] | None = None,
 ):
     """Run setup (unless csv exists), then dispatch only the cubes that are still missing.
 
@@ -1095,6 +1309,10 @@ def run_create_datacube(
     instead, calling `setup` ONLY for shapes whose cube target (named from the request, no
     catalog access) is missing and not already known-empty. Removing the flag entirely is
     blocked on #84.
+
+    `components` makes the request fused: one cube per shape joins every component (see `setup`),
+    under the fused segment. `collection`, `bands`, `properties_filter` and `processing` are then
+    the first component's.
     """
     ops.check_mosaic_scheme(mosaic_scheme)
     ops.check_mosaic_days(mosaic_days, startdate)
@@ -1105,7 +1323,7 @@ def run_create_datacube(
         startdate=startdate, enddate=enddate, bands=bands, mosaic_days=mosaic_days,
         csv_filepath=csv_filepath, label_col=label_col, mosaic_scheme=mosaic_scheme,
         overwrite_setup_csv=overwrite_setup_csv, collection=collection,
-        properties_filter=properties_filter, processing=processing,
+        properties_filter=properties_filter, processing=processing, components=components,
     )
     return _dispatch_input_csv(
         csv_filepath, cores=cores, dry_run=dry_run, unlock=unlock, overwrite=overwrite,
@@ -1133,6 +1351,7 @@ def run_create_datacube_windows(
     collection: str = config.SATELLITE_S2L2A,
     properties_filter: Mapping[str, str | Sequence[str]] | None = None,
     processing: str | None = None,
+    components: Sequence[Component] | None = None,
 ):
     """`run_create_datacube` for per-polygon windows: each window writes its own `input.csv`
     under its window segment (so one window never purges another's rows), the rows of the
@@ -1142,14 +1361,13 @@ def run_create_datacube_windows(
     Raises `NoWorkUnitsError` when no window produced a row."""
     ops.check_mosaic_scheme(mosaic_scheme)
     bands = [_collections.get(collection).canonical_to_native(b) for b in bands]
-    declaration = _collections.get(collection)
     frames = []
     for w in windows:
         ops.check_mosaic_days(mosaic_days, w.startdate)
-        segment = window_folder_segment(
+        segment = request_segment(
             w.startdate, w.enddate, mosaic_days, bands=bands, mosaic_scheme=mosaic_scheme,
-            collection=collection, declaration=declaration,
-            properties_filter=properties_filter, processing=processing,
+            collection=collection, properties_filter=properties_filter, processing=processing,
+            components=components,
         )
         window_csv = os.path.join(run_folderpath, segment, "input.csv")
         try:
@@ -1160,7 +1378,7 @@ def run_create_datacube_windows(
                 mosaic_days=mosaic_days, csv_filepath=window_csv, label_col=label_col,
                 mosaic_scheme=mosaic_scheme, overwrite_setup_csv=overwrite_setup_csv,
                 collection=collection, properties_filter=properties_filter,
-                processing=processing,
+                processing=processing, components=components,
             )
         except NoWorkUnitsError:
             _record_known_empty(run_folderpath, segment, w.ids)

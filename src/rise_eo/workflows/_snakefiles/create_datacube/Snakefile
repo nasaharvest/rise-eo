@@ -71,6 +71,9 @@ for _, row in input_df.iterrows():
         "mosaic_scheme": row["mosaic_scheme"],
         "declaration_filepath": row["declaration_filepath"],
         "bands": row["bands"],
+        # A fused unit's control file; empty for a single-collection row.
+        "fusion_arg": (f"--fusion-filepath {row['fusion_filepath']} "
+                       if isinstance(row.get("fusion_filepath"), str) else ""),
     }
     final_outputs.append(done_output)
 
@@ -103,6 +106,7 @@ rule run:
             "--mosaic-days {params._r[mosaic_days]} "
             "--mosaic-scheme {params._r[mosaic_scheme]} "
             "--declaration-filepath {params._r[declaration_filepath]} "
+            "{params._r[fusion_arg]}"
             "--njobs {params._njobs} "
             "--njobs-load-images {params._njobs_load_images}"
         )
