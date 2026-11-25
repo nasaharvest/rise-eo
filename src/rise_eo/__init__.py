@@ -9,6 +9,7 @@ import importlib.metadata
 
 from rise_eo import config
 from rise_eo.api import (
+    CollectionInput,
     InferenceResult,
     PreflightError,
     TrainingData,
@@ -27,6 +28,7 @@ __version__ = importlib.metadata.version("rise-eo")
 
 __all__ = [
     "BaseModelAdapter",
+    "CollectionInput",
     "InferenceResult",
     "ModelAdapter",
     "Output",

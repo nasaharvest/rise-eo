@@ -24,7 +24,7 @@ import json
 import math
 import os
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import geopandas as gpd
 import numpy as np
@@ -63,6 +63,7 @@ from rise_eo.workflows import stamp as _stamp
 from rise_eo.workflows.unit_csv import read_unit_csv
 
 __all__ = [
+    "CollectionInput",
     "InferenceResult",
     "PreflightError",
     "TrainingData",
@@ -427,6 +428,24 @@ def _polygon_windows(gdf, id_col: str, mosaic_days, bands) -> tuple[dict, list[s
         errs.append(f"polygons give different T for mosaic_days={mosaic_days!r} ({listing}); "
                     "every polygon needs the same T.")
     return windows, errs
+
+
+# --- one collection of a multi-collection call --------------------------------
+
+@dataclass(frozen=True)
+class CollectionInput:
+    """One collection's `collection`, `bands` and per-collection options, for the `inputs=`
+    argument of `download`, `create_training_data` and `run_inference`.
+
+    `processing` is as in the verb it is passed to (on `download`, `None` means `"latest"`);
+    `max_cloudcover` applies to `download` only.
+    """
+
+    collection: str
+    bands: Sequence[str]
+    properties_filter: Mapping[str, str | Sequence[str]] | None = field(default=None, kw_only=True)
+    processing: str | None = field(default=None, kw_only=True)
+    max_cloudcover: float | None = field(default=None, kw_only=True)
 
 
 # --- result handle -----------------------------------------------------------
