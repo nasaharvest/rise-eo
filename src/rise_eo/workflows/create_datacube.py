@@ -19,6 +19,7 @@ import json
 import os
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
+from typing import NamedTuple
 
 import geopandas as gpd
 import pandas as pd
@@ -52,6 +53,17 @@ _UNIT_IDENTITY_COLS = (
     COL_ID, "startdate", "enddate", "bands", "mosaic_days", "mosaic_scheme", "collection",
     "properties_filter", "processing",
 )
+
+
+
+class Window(NamedTuple):
+    """One distinct window of a per-polygon request: its polygons' file and ids."""
+
+    startdate: datetime.datetime
+    enddate: datetime.datetime
+    shapefilepath: str
+    ids: frozenset
+
 
 DECLARATION_FILENAME = "declaration.json"
 PARAMS_FILENAME = "params.json"
@@ -972,6 +984,75 @@ def _force_rebuild(csv_filepath: str) -> None:
                 fs.rm(filepath)
 
 
+def _prepare_input_csv(
+    *, catalog_filepath, timestamp_col, shapefilepath, id_col, run_folderpath, startdate,
+    enddate, bands, mosaic_days, csv_filepath, label_col, mosaic_scheme, overwrite_setup_csv,
+    collection, properties_filter, processing,
+) -> None:
+    """Write `csv_filepath` for ONE window: regenerate it (`overwrite_setup_csv`) or grow it
+    by the missing shapes only."""
+    if overwrite_setup_csv:
+        if fs.exists(csv_filepath):
+            fs.rm(csv_filepath)
+        setup(
+            catalog_filepath=catalog_filepath, timestamp_col=timestamp_col,
+            shapefilepath=shapefilepath, id_col=id_col, run_folderpath=run_folderpath,
+            startdate=startdate, enddate=enddate, bands=bands,
+            mosaic_days=mosaic_days,
+            csv_filepath=csv_filepath, label_col=label_col, mosaic_scheme=mosaic_scheme,
+            collection=collection, properties_filter=properties_filter,
+            processing=processing,
+        )
+        # This pass just re-derived every shape straight from the catalog, so any
+        # known-empty record for this window is superseded by what `input.csv` now
+        # says. Clearing it here is what makes a forced rebuild the escape hatch
+        # from a stale manifest, rather than a way to leave the manifest and
+        # `input.csv` disagreeing.
+        _clear_known_empty(
+            run_folderpath,
+            window_folder_segment(startdate, enddate, mosaic_days, bands=bands,
+                                  mosaic_scheme=mosaic_scheme,
+                                  collection=collection,
+                                  declaration=_collections.get(collection),
+                                  properties_filter=properties_filter,
+                                  processing=processing),
+        )
+    else:
+        build_shortfall_only(
+            catalog_filepath=catalog_filepath, timestamp_col=timestamp_col,
+            shapefilepath=shapefilepath, id_col=id_col, run_folderpath=run_folderpath,
+            startdate=startdate, enddate=enddate, bands=bands,
+            mosaic_days=mosaic_days,
+            csv_filepath=csv_filepath, label_col=label_col, mosaic_scheme=mosaic_scheme,
+            collection=collection, properties_filter=properties_filter,
+            processing=processing,
+        )
+
+
+def _dispatch_input_csv(
+    csv_filepath: str, *, cores: int, dry_run: bool, unlock: bool, overwrite: bool,
+    runner: str, runner_kwargs: dict | None,
+):
+    """Build the cubes `csv_filepath` names that are still missing, through `runner`."""
+    if overwrite:
+        _force_rebuild(csv_filepath)
+
+    dispatch_csv_filepath, n_total, n_missing = _build_shortfall(csv_filepath, force=overwrite)
+    if n_missing == 0:
+        print(f"[build] 0 of {n_total} cubes missing; nothing to build", flush=True)
+        return None
+    if 0 < n_missing < n_total:
+        print(f"[build] {n_missing} of {n_total} cubes missing; dispatching {n_missing}",
+              flush=True)
+
+    if runner == "local":
+        return runners.run_local(dispatch_csv_filepath, cores=cores, dry_run=dry_run,
+                                 unlock=unlock)
+    if runner == "aml":
+        return runners.run_aml(dispatch_csv_filepath, **(runner_kwargs or {}))
+    raise ValueError(f"Unknown runner={runner!r}; valid values: 'local', 'aml'.")
+
+
 def run_create_datacube(
     catalog_filepath: str,
     timestamp_col: str,
@@ -1018,57 +1099,78 @@ def run_create_datacube(
     ops.check_mosaic_scheme(mosaic_scheme)
     ops.check_mosaic_days(mosaic_days, startdate)
     bands = [_collections.get(collection).canonical_to_native(b) for b in bands]
-    if overwrite_setup_csv:
-        if fs.exists(csv_filepath):
-            fs.rm(csv_filepath)
-        setup(
+    _prepare_input_csv(
+        catalog_filepath=catalog_filepath, timestamp_col=timestamp_col,
+        shapefilepath=shapefilepath, id_col=id_col, run_folderpath=run_folderpath,
+        startdate=startdate, enddate=enddate, bands=bands, mosaic_days=mosaic_days,
+        csv_filepath=csv_filepath, label_col=label_col, mosaic_scheme=mosaic_scheme,
+        overwrite_setup_csv=overwrite_setup_csv, collection=collection,
+        properties_filter=properties_filter, processing=processing,
+    )
+    return _dispatch_input_csv(
+        csv_filepath, cores=cores, dry_run=dry_run, unlock=unlock, overwrite=overwrite,
+        runner=runner, runner_kwargs=runner_kwargs,
+    )
+
+
+def run_create_datacube_windows(
+    windows: Sequence[Window],
+    catalog_filepath: str,
+    timestamp_col: str,
+    id_col: str,
+    run_folderpath: str,
+    bands: list[str],
+    mosaic_days: int | str,
+    csv_filepath: str,
+    label_col: str | None,
+    cores: int,
+    *,
+    mosaic_scheme: str = config.MOSAIC_SCHEME,
+    overwrite_setup_csv: bool = True,
+    overwrite: bool = False,
+    runner: str = "local",
+    runner_kwargs: dict | None = None,
+    collection: str = config.SATELLITE_S2L2A,
+    properties_filter: Mapping[str, str | Sequence[str]] | None = None,
+    processing: str | None = None,
+):
+    """`run_create_datacube` for per-polygon windows: each window writes its own `input.csv`
+    under its window segment (so one window never purges another's rows), the rows of the
+    ids each window names are merged into `csv_filepath`, and the missing cubes of every
+    window go to the runner in one dispatch.
+
+    Raises `NoWorkUnitsError` when no window produced a row."""
+    ops.check_mosaic_scheme(mosaic_scheme)
+    bands = [_collections.get(collection).canonical_to_native(b) for b in bands]
+    declaration = _collections.get(collection)
+    frames = []
+    for w in windows:
+        ops.check_mosaic_days(mosaic_days, w.startdate)
+        segment = window_folder_segment(
+            w.startdate, w.enddate, mosaic_days, bands=bands, mosaic_scheme=mosaic_scheme,
+            collection=collection, declaration=declaration,
+            properties_filter=properties_filter, processing=processing,
+        )
+        window_csv = os.path.join(run_folderpath, segment, "input.csv")
+        _prepare_input_csv(
             catalog_filepath=catalog_filepath, timestamp_col=timestamp_col,
-            shapefilepath=shapefilepath, id_col=id_col, run_folderpath=run_folderpath,
-            startdate=startdate, enddate=enddate, bands=bands,
-            mosaic_days=mosaic_days,
-            csv_filepath=csv_filepath, label_col=label_col, mosaic_scheme=mosaic_scheme,
-            collection=collection, properties_filter=properties_filter,
-            processing=processing,
+            shapefilepath=w.shapefilepath, id_col=id_col, run_folderpath=run_folderpath,
+            startdate=w.startdate, enddate=w.enddate, bands=bands, mosaic_days=mosaic_days,
+            csv_filepath=window_csv, label_col=label_col, mosaic_scheme=mosaic_scheme,
+            overwrite_setup_csv=overwrite_setup_csv, collection=collection,
+            properties_filter=properties_filter, processing=processing,
         )
-        # This pass just re-derived every shape straight from the catalog, so any
-        # known-empty record for this window is superseded by what `input.csv` now
-        # says. Clearing it here is what makes a forced rebuild the escape hatch
-        # from a stale manifest, rather than a way to leave the manifest and
-        # `input.csv` disagreeing.
-        _clear_known_empty(
-            run_folderpath,
-            window_folder_segment(startdate, enddate, mosaic_days, bands=bands,
-                                  mosaic_scheme=mosaic_scheme,
-                                  collection=collection,
-                                  declaration=_collections.get(collection),
-                                  properties_filter=properties_filter,
-                                  processing=processing),
-        )
-    else:
-        build_shortfall_only(
-            catalog_filepath=catalog_filepath, timestamp_col=timestamp_col,
-            shapefilepath=shapefilepath, id_col=id_col, run_folderpath=run_folderpath,
-            startdate=startdate, enddate=enddate, bands=bands,
-            mosaic_days=mosaic_days,
-            csv_filepath=csv_filepath, label_col=label_col, mosaic_scheme=mosaic_scheme,
-            collection=collection, properties_filter=properties_filter,
-            processing=processing,
-        )
-
-    if overwrite:
-        _force_rebuild(csv_filepath)
-
-    dispatch_csv_filepath, n_total, n_missing = _build_shortfall(csv_filepath, force=overwrite)
-    if n_missing == 0:
-        print(f"[build] 0 of {n_total} cubes missing; nothing to build", flush=True)
-        return None
-    if 0 < n_missing < n_total:
-        print(f"[build] {n_missing} of {n_total} cubes missing; dispatching {n_missing}",
-              flush=True)
-
-    if runner == "local":
-        return runners.run_local(dispatch_csv_filepath, cores=cores, dry_run=dry_run,
-                                 unlock=unlock)
-    if runner == "aml":
-        return runners.run_aml(dispatch_csv_filepath, **(runner_kwargs or {}))
-    raise ValueError(f"Unknown runner={runner!r}; valid values: 'local', 'aml'.")
+        if not fs.exists(window_csv):
+            continue
+        with fs.open(window_csv, "r") as f:
+            df = pd.read_csv(f)
+        frames.append(df[df[COL_ID].astype(str).isin(w.ids)])
+    merged = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    if len(merged) == 0:
+        raise NoWorkUnitsError("no polygon in any window had tiles in range/overlap.")
+    with fs.open(csv_filepath, "w") as f:
+        merged.to_csv(f, index=False)
+    return _dispatch_input_csv(
+        csv_filepath, cores=cores, dry_run=False, unlock=False, overwrite=overwrite,
+        runner=runner, runner_kwargs=runner_kwargs,
+    )
