@@ -193,16 +193,18 @@ def test_ac2_two_windows_give_one_training_set_with_window_starts(tmp_path, monk
 
 def test_a_polygon_that_changes_window_moves_only_its_own_cube(tmp_path, monkeypatch):
     cat = _archive(tmp_path, monkeypatch)
-    dispatched = []
+    dispatched, built = [], []
     monkeypatch.setattr(runners, "run_local",
-                        lambda csv, **kw: (dispatched.append(csv), _run_rows(csv, [])))
+                        lambda csv, **kw: (dispatched.append(csv), _run_rows(csv, built)))
     _call(tmp_path, _polys([("p18", *Y18), ("p19", *Y19)]), catalog_filepath=cat)
     ids_before = fs.load_npy(str(tmp_path / "export" / "ids.npy"))
 
     dispatched.clear()
+    built.clear()
     td = _call(tmp_path, _polys([("p18", *Y19), ("p19", *Y19)]), catalog_filepath=cat)
     ids_after = fs.load_npy(str(tmp_path / "export" / "ids.npy"))
     assert len(dispatched) == 1
+    assert [row[0] for row in built] == ["p18"]           # p19's cube was not rebuilt
     assert set(ids_before) == set(ids_after) == {"p18", "p19"}
     out = td.load()
     assert (out["window_starts"] == np.datetime64("2019-01-01", "ns")).all()
