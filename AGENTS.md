@@ -32,7 +32,11 @@ A git worktree has no `.venv`. Run tests there with
 Every change is a pull request. Work on a branch, push it, and open a draft PR. When gates 1–3 hold,
 mark it ready (`gh pr ready <N>`). If the review (gate 3) or the real run (gate 4) waits on the
 maintainer, mark it ready once the gates you can meet hold, and say what waits in the PR description.
-Only the maintainer merges; never push to `main`. The PR description holds the state of the work: what
+Only the maintainer merges, or an agent session whose instructions from the maintainer allow it. Such a
+session merges only when the four gates hold (gate 4 may be folded into a later run-book, as
+`CONTRIBUTING.md` gate 4 says), and applies the release label. It leaves to the maintainer a PR that adds
+or changes a spec or ADR, changes a rule file or CI, needs a real run now, has an unresolved finding, or
+comes from an outside contributor. Never push to `main`. The PR description holds the state of the work: what
 is done, what is next, and the review findings. The PR title becomes the line in the release notes.
 
 A PR merges when it passes four gates (details in `CONTRIBUTING.md`):
@@ -115,8 +119,8 @@ A PR merges when it passes four gates (details in `CONTRIBUTING.md`):
   agent (`.claude/agents/implementer.md`) with the spec sections, the branch and the PR number. That is
   the only subagent that writes code. When it returns, the planning session spawns the reviewer
   itself; the implementer cannot spawn agents. One run covers one PR. It ends when gates 1–3
-  hold and the planning session has marked the PR ready; it never merges and never starts the next
-  PR. Writing the code in a separate cheaper-model session instead also works.
+  hold and the planning session has marked the PR ready; the implementer never merges and never
+  starts the next PR. Writing the code in a separate cheaper-model session instead also works.
 - **Choosing the reviewer (Claude Code).** Spawn `pr-reviewer-small` when all three hold, otherwise
   `pr-reviewer`:
   - no contract change: the linked issue is not a spec's tracking issue, and the PR adds or changes no

@@ -1,5 +1,5 @@
 # Release notes are generated from merged PR titles, grouped by label (spec 102 D15).
-# The maintainer applies one label per PR at merge.
+# Whoever merges (the maintainer, or an agent session they authorised) applies one label per PR.
 changelog:
   categories:
     - title: Breaking changes
