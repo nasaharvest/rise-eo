@@ -611,16 +611,13 @@ def collection_to_declaration(collection: pystac.Collection) -> CollectionDeclar
 
 # --- serialization -----------------------------------------------------------
 
-PROCESSING_EXTENSION = "https://stac-extensions.github.io/processing/v1.1.0/schema.json"
-
-
 def _add_processing(obj, processing: dict) -> None:
     """Put the processing extension's `software` and `lineage` fields on a Collection or an Item."""
     fields = obj.properties if isinstance(obj, pystac.Item) else obj.extra_fields
     fields["processing:software"] = processing["software"]
     fields["processing:lineage"] = processing["lineage"]
-    if PROCESSING_EXTENSION not in obj.stac_extensions:
-        obj.stac_extensions.append(PROCESSING_EXTENSION)
+    if _PROCESSING_EXT not in obj.stac_extensions:
+        obj.stac_extensions.append(_PROCESSING_EXT)
 
 
 def write_stac_catalog(

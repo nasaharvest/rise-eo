@@ -152,7 +152,7 @@ def test_each_cube_records_its_builder_code(tmp_path, monkeypatch):
     assert [c["code"] for c in md["components"]] == [record, record]
 
 
-def test_lineage_lists_two_build_commits_and_flags_a_cube_with_none():
+def test_lineage_lists_two_build_commits_and_records_a_cube_without_code():
     facts = lineage.CubeFacts()
     one = {"rise-eo": "1", "commit": "aaa", "dirty": False}
     two = {"rise-eo": "1", "commit": "bbb", "dirty": False}
@@ -160,10 +160,50 @@ def test_lineage_lists_two_build_commits_and_flags_a_cube_with_none():
     facts.add({"code": two, "components": [{"code": one}]})
     assert facts.result()["build_code"] == [one, two]
     facts.add({"components": []})                       # a cube that recorded none
-    assert None in facts.result()["build_code"]
-    with pytest.raises(ValueError, match="rebuild the cubes"):
-        lineage.document(statement="s", runner="local", request={}, sources={}, steps=[],
-                         facts=facts.result())
+    assert lineage.UNRECORDED_CODE in facts.result()["build_code"]
+    assert len(facts.result()["build_code"]) == 3
+
+
+def _strip_code(cube_folder):
+    path = os.path.join(cube_folder, "metadata.pickle.npy")
+    md = fs.load_npy(path, allow_pickle=True)[()]
+    md.pop("code", None)
+    for c in md.get("components", []):
+        c.pop("code", None)
+    fs.save_npy(path, md, allow_pickle=True)
+
+
+def test_a_properties_filter_with_an_int_value_compares_as_text():
+    trained = {"sources": {"collections": [{"collection": "c", "bands": ["a"],
+                                            "properties_filter": {"sat:relative_orbit": "146"}}]},
+               "process_steps": [{"step": "mosaic", "parameters": {"period": "P1M", "n_timestamps": 1}}]}
+    request = [{"collection": "c", "bands": ["a"], "properties_filter": {"sat:relative_orbit": 146}}]
+    assert lineage.training_mismatches(trained, request, mosaic_days="month", n_timestamps=1) == []
+    request[0]["properties_filter"] = {"sat:relative_orbit": [146, 147]}
+    assert len(lineage.training_mismatches(trained, request, mosaic_days="month", n_timestamps=1)) == 1
+
+
+def test_an_untracked_file_makes_the_checkout_dirty(monkeypatch):
+    seen = []
+    monkeypatch.setattr(lineage, "_git", lambda *args, cwd: seen.append(args) or "x")
+    assert lineage._checkout_state() == ("x", True)
+    assert ("status", "--porcelain") in seen          # untracked files count: no --untracked-files=no
+
+
+def test_cubes_without_a_code_record_give_lineage_and_reflatten_without_rebuilding(trained, tmp_path,
+                                                                               monkeypatch):
+    env, td, _ = trained
+    import glob
+
+    for md in glob.glob(str(tmp_path / "export" / "run" / "**" / "metadata.pickle.npy"), recursive=True):
+        _strip_code(os.path.dirname(md))
+    os.remove(os.path.join(td.export_folderpath, lineage.LINEAGE_NAME))
+    built = []
+    real = builder.build_datacube
+    monkeypatch.setattr(builder, "build_datacube", lambda **kw: built.append(kw) or real(**kw))
+    again = _train(env, tmp_path)
+    assert built == []
+    assert _lineage_of(again)["code"]["build"] == [lineage.UNRECORDED_CODE]
 
 
 def test_code_record_reads_a_git_checkout_and_a_pip_recorded_commit(monkeypatch):
@@ -379,3 +419,21 @@ def test_a_lineage_version_this_rise_eo_does_not_read_raises(tmp_path):
     fs.write_text(path, json.dumps({"lineage_version": 99}))
     with pytest.raises(ValueError, match=r"lineage_version 99.*reads \[1\]"):
         lineage.read(path)
+
+
+def test_inference_over_cubes_without_a_code_record_writes_lineage(infer_env, tmp_path, monkeypatch):
+    from rise_eo.workflows import runners
+
+    env, td, ran = infer_env
+    original = runners.run_local_inference
+
+    def strip_after(csv, **kw):
+        result = original(csv, **kw)
+        for _, row in pd.read_csv(csv).iterrows():
+            _strip_code(row["export_folderpath"])
+        return result
+
+    monkeypatch.setattr(runners, "run_local_inference", strip_after)
+    _infer(env, tmp_path, _save_bundle(tmp_path, "b", training_data=td))
+    doc = lineage.read(str(tmp_path / "out" / "lineage.json"))
+    assert doc["code"]["build"] == [lineage.UNRECORDED_CODE]

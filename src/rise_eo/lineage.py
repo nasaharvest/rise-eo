@@ -56,7 +56,7 @@ def _checkout_state() -> tuple[str, bool] | None:
     if not os.path.exists(os.path.join(root, ".git")):
         return None
     commit = _git("rev-parse", "HEAD", cwd=root)
-    status = _git("status", "--porcelain", "--untracked-files=no", cwd=root)
+    status = _git("status", "--porcelain", cwd=root)
     return None if not commit or status is None else (commit, bool(status))
 
 
@@ -97,13 +97,16 @@ def software() -> dict:
 
 # --- what the cubes say ---------------------------------------------------------------------
 
+UNRECORDED_CODE = {"rise-eo": None, "commit": None, "recorded": False,
+                   "note": "a cube built before cubes recorded their builder's code"}
+
+
 class CubeFacts:
     """What a set of cubes' metadata says about where they came from."""
 
     def __init__(self) -> None:
         self._provenance: list = []
         self._code: dict[str, dict] = {}
-        self._missing_code = False
         self._overlap: dict[str, set[str]] = {}
 
     def add(self, metadata: dict) -> None:
@@ -113,10 +116,8 @@ class CubeFacts:
         provenance = metadata.get("provenance") or {}
         self._provenance.append(provenance)
         for record in [metadata.get("code")] + [c.get("code") for c in metadata.get("components", [])]:
-            if record is None:
-                self._missing_code = True
-            else:
-                self._code[json.dumps(record, sort_keys=True)] = record
+            record = record or UNRECORDED_CODE
+            self._code[json.dumps(record, sort_keys=True)] = record
         for collection, block in provenance.items():
             tiles = {parsed[0] for i in block.get("ids", []) if (parsed := _parse_mgrs(str(i)))}
             if len(tiles) > 1:
@@ -124,13 +125,13 @@ class CubeFacts:
 
     def result(self) -> dict:
         """`granule_ids` and `provenance` per collection, the distinct `build_code` records
-        (`None` when a cube recorded none) and the `overlapping_mgrs_tiles` per collection."""
+        (`UNRECORDED_CODE` for a cube that recorded none) and the `overlapping_mgrs_tiles` per collection."""
         merged = _processing.merge_provenance(self._provenance, with_ids=True)
         code = [self._code[k] for k in sorted(self._code)]
         return {
             "granule_ids": {c: b["ids"] for c, b in merged.items()},
             "provenance": {c: {k: v for k, v in b.items() if k != "ids"} for c, b in merged.items()},
-            "build_code": code + ([None] if self._missing_code else []),
+            "build_code": code,
             "overlapping_mgrs_tiles": {c: sorted(t) for c, t in sorted(self._overlap.items())},
         }
 
@@ -285,13 +286,7 @@ def statement_for(subject: str, inputs: Sequence[dict], *, mosaic_days, n_timest
 
 def document(*, statement: str, runner: str, request: dict, sources: dict, steps: list[dict],
              facts: dict, extra: Mapping | None = None) -> dict:
-    """The `lineage.json` content; raises when a cube recorded no build code."""
-    if None in facts["build_code"]:
-        raise ValueError(
-            "a datacube has no `code` record in its metadata, so lineage.json cannot say what "
-            "built it. It was built before cubes recorded their code: rebuild the cubes "
-            "(create_training_data(overwrite='datacubes') or a fresh run folder)."
-        )
+    """The `lineage.json` content."""
     doc = {
         "lineage_version": LINEAGE_VERSION,
         "statement": statement,
@@ -430,8 +425,9 @@ def read(path: str) -> dict:
 def _filter_key(properties_filter) -> dict | None:
     if not properties_filter:
         return None
-    return {k: sorted([v] if isinstance(v, str) else map(str, v))
-            for k, v in sorted(properties_filter.items())}
+    from rise_eo.catalog.catalog import properties_filter_values
+
+    return {k: sorted(properties_filter_values(v)) for k, v in sorted(properties_filter.items())}
 
 
 def training_mismatches(training: dict, inputs: Sequence[dict], *, mosaic_days, n_timestamps) -> list[str]:
