@@ -154,6 +154,12 @@ in one dispatch. A cube lives at
 the code is the collection's `SHORT_NAME`, the period is `P1M` or `P<n>D`, the hash digests every parameter
 and the segment's `params.json` writes them out.
 
+`download(inputs=[CollectionInput(...), ...])` runs one download per collection, in order, after every
+input's preflight has passed, and returns `{collection: catalog_filepath}`. Each built-in collection module
+declares its rise-eo band names as `BANDS`, and no two collections share one, so a band name identifies its
+collection. `create_training_data` and `run_inference` take the same `inputs=` with `archive_root=`; they
+accept one input today.
+
 **Code that looks simplifiable but is not:**
 
 - **`_dt2ts` attaches UTC to a naive date** (`datacube/ops.py`). Catalog timestamps are tz-aware;

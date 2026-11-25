@@ -49,6 +49,15 @@ _Avoid_: satellite (S1 GRD and S1 RTC are the same satellite; HLS is two), produ
 The `[a-z0-9]+` code a collection carries in a cube path (`s2l2a`, `s1rtc`); `register(short_name=)` sets it,
 else it is the collection id with every character outside `[a-z0-9]` removed. Two collections never share one.
 
+**CollectionInput** (`rise_eo.CollectionInput`):
+One collection's `collection`, `bands` and per-collection options (`properties_filter`, `processing`,
+`max_cloudcover`), passed in a list as `inputs=` to `download`, `create_training_data` and `run_inference`.
+`inputs=` replaces the scalar arguments of the same names. A collection and a band name each appear once.
+
+**Archive root** (`archive_root=`):
+The folder `download` wrote (its `dst_folderpath`). With `inputs=`, the verbs that read a catalog take it in
+place of `catalog_filepath`: each catalog is `{archive_root}/{collection}/catalog.parquet`.
+
 **Period code**:
 The ISO 8601 duration in a cube path: `P1M` for `mosaic_days="month"`, `P<n>D` for an `int`.
 _Avoid_: `m20`, mosaic length.

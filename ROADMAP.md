@@ -315,7 +315,7 @@ order. The current goal's state lives in its tracking issue and the pinned "Orde
 | **rise-eo as an installed module, driven from a notebook** | 2026-08-21 | ✅ **Done** (maintainer, 2026-10-07). A notebook in a separate repository, with rise-eo installed as a pinned dependency, ran the full pipeline and the work was demoed. Built by specs 54–57 and issues #78–#82; `v0.1.0` was tagged on 2026-09-04. |
 | **Collection-agnostic verbs** (spec 58) | 2026-09-04 | 🅿️ **Parked** (maintainer, 2026-10-07). Sentinel-2 L2A and Sentinel-1 RTC work through the same verbs; Sentinel-1 ran on AML on 2026-09-29. HLS (spec 58 P3) is parked: new satellite sources are meant to come from contributors, not from the maintainer alone. MODIS was deferred on 2026-09-04. |
 | **Contributor readiness** (spec 102) | 2026-09-29 | Current. See #102. |
-| **Fused Sentinel-2 + Sentinel-1 training data** (spec 214) | 2026-11 | In progress: fused S2+S1 cubes, monthly windows, per-polygon dates, lineage. P1 (opt in to median both Sentinel-1 orbit states) is under review in #217; P3 (per-polygon windows in `create_training_data`) is under review in #225. See #214. |
+| **Fused Sentinel-2 + Sentinel-1 training data** (spec 214) | 2026-11 | In progress: fused S2+S1 cubes, monthly windows, per-polygon dates, lineage. P1 (opt in to median both Sentinel-1 orbit states), P2 (monthly windows, short cube paths) and P3 (per-polygon windows in `create_training_data`) are merged. P4 (`CollectionInput`, a download of several collections in one call) is under review in #228; the fused cube is P5. See #214. |
 
 ### 5.9 Post-v1 sequencing (user, 2026-07-02) — historical, moved from the old TODO file
 

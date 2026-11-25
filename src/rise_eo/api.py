@@ -19,12 +19,13 @@ Every verb runs a cheap **preflight** (ROADMAP §2.6) before any heavy work.
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 import json
 import math
 import os
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import geopandas as gpd
 import numpy as np
@@ -63,6 +64,7 @@ from rise_eo.workflows import stamp as _stamp
 from rise_eo.workflows.unit_csv import read_unit_csv
 
 __all__ = [
+    "CollectionInput",
     "InferenceResult",
     "PreflightError",
     "TrainingData",
@@ -429,6 +431,24 @@ def _polygon_windows(gdf, id_col: str, mosaic_days, bands) -> tuple[dict, list[s
     return windows, errs
 
 
+# --- one collection of a multi-collection call --------------------------------
+
+@dataclass(frozen=True)
+class CollectionInput:
+    """One collection's `collection`, `bands` and per-collection options, for the `inputs=`
+    argument of `download`, `create_training_data` and `run_inference`.
+
+    `processing` is as in the verb it is passed to (on `download`, `None` means `"latest"`);
+    `max_cloudcover` applies to `download` only.
+    """
+
+    collection: str
+    bands: Sequence[str]
+    properties_filter: Mapping[str, str | Sequence[str]] | None = field(default=None, kw_only=True)
+    processing: str | None = field(default=None, kw_only=True)
+    max_cloudcover: float | None = field(default=None, kw_only=True)
+
+
 # --- result handle -----------------------------------------------------------
 
 @dataclass
@@ -495,18 +515,87 @@ class InferenceResult:
 
 # --- verbs -------------------------------------------------------------------
 
+class _Unset:
+    def __repr__(self) -> str:
+        return "<unset>"
+
+
+_UNSET = _Unset()  # a default that tells "not passed" from every value a caller can pass
+
+
+def _check_inputs(inputs, passed: Sequence[str]) -> list[str]:
+    """Errors for `inputs=`: it must be a non-empty sequence of `CollectionInput`, replace the
+    scalar arguments named in `passed`, name each collection once and each band once."""
+    if isinstance(inputs, (str, bytes, Mapping)) or not isinstance(inputs, Sequence) or not inputs:
+        return ["inputs must be a non-empty list of rise_eo.CollectionInput."]
+    bad = [i for i in inputs if not isinstance(i, CollectionInput)]
+    if bad:
+        return [f"inputs must hold rise_eo.CollectionInput objects (got {bad[0]!r})."]
+    errs = []
+    if passed:
+        errs.append(f"inputs= replaces {list(passed)}: do not pass them alongside inputs=; "
+                    "per-collection options go on each CollectionInput.")
+    seen: set[str] = set()
+    for i in inputs:
+        if i.collection in seen:
+            errs.append(f"collection {i.collection!r} appears more than once in inputs.")
+        seen.add(i.collection)
+    owner: dict[str, str] = {}
+    for i in inputs:
+        if not i.bands:
+            errs.append(f"collection {i.collection!r}: bands must be a non-empty list.")
+            continue
+        try:
+            native = _native_bands(i.collection, i.bands)
+        except ValueError as exc:
+            errs.append(str(exc))
+            continue
+        for band in native:
+            if owner.setdefault(band, i.collection) != i.collection:
+                errs.append(f"band {band!r} is named by both {owner[band]!r} and "
+                            f"{i.collection!r}; a band name must belong to one collection.")
+    return errs
+
+
+def _build_inputs_args(inputs, archive_root, passed: Mapping[str, object]) -> dict:
+    """The single-collection arguments of a build verb called with `inputs=`; raises
+    `PreflightError`. `passed` maps each scalar argument `inputs=` replaces to what the caller
+    gave it (`None` = not given)."""
+    errs = _check_inputs(inputs, [k for k, v in passed.items() if v is not None])
+    if archive_root is None:
+        errs.append("inputs= needs archive_root= (the root `download` wrote) in place of "
+                    "catalog_filepath.")
+    if not errs and len(inputs) > 1:
+        errs.append("fusing several collections is not supported yet: pass one input.")
+    _raise_preflight(errs)
+    one = inputs[0]
+    return dict(
+        collection=one.collection, bands=list(one.bands),
+        properties_filter=one.properties_filter, processing=one.processing,
+        max_cloudcover=one.max_cloudcover,
+        catalog_filepath=archive_catalog_filepath(archive_root, one.collection),
+    )
+
+
+def _check_no_archive_root(archive_root) -> None:
+    if archive_root is not None:
+        raise PreflightError("archive_root= goes with inputs=; without inputs= pass "
+                             "catalog_filepath=.")
+
+
 def download(
     roi,
     startdate: datetime.datetime,
     enddate: datetime.datetime,
-    bands: list[str],
+    bands: list[str] | None,
     dst_folderpath: str,
     creds: CdseCredentials | None = None,
     *,
     source: str = "mpc",
-    collection: str = config.SATELLITE_S2L2A,
+    collection: str | None = None,
     properties_filter: Mapping[str, str | Sequence[str]] | None = None,
-    processing: str = _processing.LATEST,
+    processing: str | None = _UNSET,
+    inputs: Sequence[CollectionInput] | None = None,
     max_tiles: int,
     max_cloudcover: float | None = None,
     cog: bool = True,
@@ -519,6 +608,13 @@ def download(
     """Fetch `collection` granules for the ROI/date range into the archive rooted at
     `dst_folderpath`, build/append the collection's TileCatalog, and return that catalog's
     filepath (feed it to `create_training_data`).
+
+    **Several collections.** `inputs=[CollectionInput(...), ...]` replaces `collection`, `bands`
+    (pass `None`), `properties_filter`, `processing` and `max_cloudcover`: passing both raises. A
+    collection may appear once and a band name once. Every input's preflight runs before the
+    first download; then one download per input, in order, shares `roi`, the window, `source`,
+    `max_tiles` (per collection) and the runner settings. It returns `{collection:
+    catalog_filepath}`, even for one input; `processing=None` on an input means `"latest"`.
 
     **Archive layout.** `dst_folderpath` is the archive ROOT; granules land in
     `{dst_folderpath}/{collection}/YYYY/MM/DD/{canonical granule name}/` and the catalog is
@@ -581,30 +677,78 @@ def download(
     """
     startdate, enddate, date_errs = _normalize_window(startdate, enddate)
     errs = _check_local_seams(runner, storage) + date_errs
+    if inputs is None:
+        specs = [CollectionInput(
+            config.SATELLITE_S2L2A if collection is None else collection, bands,
+            properties_filter=properties_filter,
+            processing=_processing.LATEST if processing is _UNSET else processing,
+            max_cloudcover=max_cloudcover,
+        )]
+    else:
+        given = [name for name, was_passed in (
+            ("collection", collection is not None), ("bands", bands is not None),
+            ("properties_filter", properties_filter is not None),
+            ("processing", processing is not _UNSET),
+            ("max_cloudcover", max_cloudcover is not None),
+        ) if was_passed]
+        input_errs = _check_inputs(inputs, given)
+        errs += input_errs
+        specs = [] if input_errs else [
+            dataclasses.replace(i, processing=i.processing or _processing.LATEST) for i in inputs
+        ]
     if not date_errs:
         # A download has no mosaic: any finite `mosaic_days >= 1` makes both mosaic checks
         # inert, so this checks only the dates and `bands`.
-        errs += _check_window(startdate, enddate, 20, bands)
-    errs += _check_download_source(
-        source, collection, max_tiles,
-        runner=runner, creds=creds, max_tiles_required=False,
-    )
-    if max_cloudcover is not None and not errs:
-        errs += _check_cloudcover_capability(collection, max_cloudcover)
-    if properties_filter and source != "mpc":
-        # Loud, not silently ignored: a caller who narrowed to one orbit and still got
-        # every orbit's bytes would only find out from the disk bill.
-        errs.append(
-            f"properties_filter is not implemented for source={source!r} (only 'mpc'); "
-            "drop it, or use source='mpc'."
+        errs += _check_dates(startdate, enddate, 20)
+    many = len(specs) > 1
+    for spec in specs:
+        spec_errs = [] if inputs is not None or spec.bands else ["bands must be a non-empty list."]
+        spec_errs += _check_download_source(
+            source, spec.collection, max_tiles,
+            runner=runner, creds=creds, max_tiles_required=False,
         )
-    errs += _processing.processing_errors(processing, collection=collection, allow_none=False)
+        if spec.max_cloudcover is not None and not (errs or spec_errs):
+            spec_errs += _check_cloudcover_capability(spec.collection, spec.max_cloudcover)
+        if spec.properties_filter and source != "mpc":
+            # Loud, not silently ignored: a caller who narrowed to one orbit and still got
+            # every orbit's bytes would only find out from the disk bill.
+            spec_errs.append(
+                f"properties_filter is not implemented for source={source!r} (only 'mpc'); "
+                "drop it, or use source='mpc'."
+            )
+        spec_errs += _processing.processing_errors(
+            spec.processing, collection=spec.collection, allow_none=False)
+        errs += [f"{spec.collection}: {e}" for e in spec_errs] if many else spec_errs
     _raise_preflight(errs)
 
     _configure_storage(storage)
+    fs.makedirs(dst_folderpath)
+    catalog_filepaths = {}
+    for spec in specs:
+        rk = runner_kwargs
+        if many and runner == "aml" and (runner_kwargs or {}).get("run_id"):
+            # One run_id names one run folder; reusing it would read the first collection's
+            # status files as the second's.
+            rk = {**runner_kwargs,
+                  "run_id": f"{runner_kwargs['run_id']}-{_collections.short_name_of(spec.collection)}"}
+        catalog_filepaths[spec.collection] = _download_one(
+            spec, roi=roi, startdate=startdate, enddate=enddate, dst_folderpath=dst_folderpath,
+            creds=creds, source=source, max_tiles=max_tiles, cog=cog, progress=progress,
+            max_concurrent=max_concurrent, runner=runner, runner_kwargs=rk,
+        )
+    if inputs is None:
+        return catalog_filepaths[specs[0].collection]
+    return catalog_filepaths
+
+
+def _download_one(
+    spec: CollectionInput, *, roi, startdate, enddate, dst_folderpath, creds, source,
+    max_tiles, cog, progress, max_concurrent, runner, runner_kwargs,
+) -> str:
+    """Fetch one collection of a validated `download` call and return its catalog filepath."""
+    collection, bands, processing = spec.collection, spec.bands, spec.processing
     # `dst_folderpath` is the archive root; the catalog lives in the collection's own
     # directory.
-    fs.makedirs(dst_folderpath)
     catalog_filepath = archive_catalog_filepath(dst_folderpath, collection)
     fs.makedirs(os.path.dirname(catalog_filepath))
 
@@ -614,8 +758,8 @@ def download(
         _runners.run_aml_download(
             roi=roi, startdate=startdate, enddate=enddate, bands=bands,
             dst_folderpath=dst_folderpath, catalog_filepath=catalog_filepath,
-            source=source, max_tiles=max_tiles, max_cloudcover=max_cloudcover, cog=cog,
-            collection=collection, properties_filter=properties_filter,
+            source=source, max_tiles=max_tiles, max_cloudcover=spec.max_cloudcover, cog=cog,
+            collection=collection, properties_filter=spec.properties_filter,
             processing=processing, **(runner_kwargs or {}),
         )
         return catalog_filepath
@@ -625,15 +769,15 @@ def download(
         _mpc_download(
             roi=roi, startdate=startdate, enddate=enddate, bands=bands,
             root_folderpath=dst_folderpath, catalog=catalog,
-            max_tiles=max_tiles, max_cloudcover=max_cloudcover, progress=progress,
+            max_tiles=max_tiles, max_cloudcover=spec.max_cloudcover, progress=progress,
             collection=collection, max_concurrent=max_concurrent,
-            properties_filter=properties_filter, processing=processing,
+            properties_filter=spec.properties_filter, processing=processing,
         )
     else:
         _cdse_download(
             roi=roi, startdate=startdate, enddate=enddate, bands=bands,
             root_folderpath=dst_folderpath, catalog=catalog, creds=creds,
-            max_tiles=max_tiles, max_cloudcover=max_cloudcover, cog=cog, progress=progress,
+            max_tiles=max_tiles, max_cloudcover=spec.max_cloudcover, cog=cog, progress=progress,
             collection=collection, max_concurrent_s3=max_concurrent, processing=processing,
         )
     return catalog_filepath
@@ -645,21 +789,23 @@ _download_verb = download  # internal alias: `create_training_data`'s `download`
 
 def create_training_data(
     label_polygons,
-    catalog_filepath: str,
+    catalog_filepath: str | None,
     startdate: datetime.datetime | None,
     enddate: datetime.datetime | None,
     mosaic_days: int | str,
-    bands: list[str],
+    bands: list[str] | None,
     id_col: str,
     export_folderpath: str,
     *,
+    inputs: Sequence[CollectionInput] | None = None,
+    archive_root: str | None = None,
     label_col: str | None = None,
     adapter=None,
     feature_sequence=None,
     aggregate=None,
     cores: int = 1,
     source: str = "mpc",
-    collection: str = config.SATELLITE_S2L2A,
+    collection: str | None = None,
     properties_filter: Mapping[str, str | Sequence[str]] | None = None,
     processing: str | None = None,
     download: bool = False,
@@ -751,8 +897,27 @@ def create_training_data(
     must be named for `collection`, and `download=True` fetches into the archive root two
     levels up.
 
-    Spec: 49, 58, 59.
+    **`inputs=`.** `inputs=[CollectionInput(...)]` replaces `collection`, `bands` (pass `None`),
+    `properties_filter`, `processing`, `max_cloudcover` and `catalog_filepath` (pass `None`):
+    passing both raises. Give `archive_root=`, the root `download` wrote; the catalog is
+    `{archive_root}/{collection}/catalog.parquet`. One input builds exactly as the scalar
+    arguments do; more than one raises until fusing several collections is supported.
+
+    Spec: 49, 58, 59, 214.
     """
+    if inputs is None:
+        _check_no_archive_root(archive_root)
+        if catalog_filepath is None:
+            raise PreflightError("catalog_filepath is required (or inputs= with archive_root=).")
+        collection = config.SATELLITE_S2L2A if collection is None else collection
+    else:
+        resolved = _build_inputs_args(inputs, archive_root, dict(
+            collection=collection, bands=bands, properties_filter=properties_filter,
+            processing=processing, max_cloudcover=max_cloudcover, catalog_filepath=catalog_filepath,
+        ))
+        collection, bands, properties_filter, processing, max_cloudcover, catalog_filepath = (
+            resolved[k] for k in ("collection", "bands", "properties_filter", "processing",
+                                  "max_cloudcover", "catalog_filepath"))
     _check_one_feature_transform(adapter, feature_sequence)
     if overwrite not in _VALID_OVERWRITE:
         raise PreflightError(
@@ -1770,13 +1935,15 @@ def run_inference(
     # --- ROI mode — mutually exclusive with inference_datacubes -------------
     roi=None,
     catalog_filepath: str | None = None,
+    inputs: Sequence[CollectionInput] | None = None,
+    archive_root: str | None = None,
     startdate: datetime.datetime | None = None,
     enddate: datetime.datetime | None = None,
     mosaic_days: int | str | None = None,
     bands: list[str] | None = None,
     grid_size_km: float = 5,
     scale_fact: float = 1.1,
-    collection: str = config.SATELLITE_S2L2A,
+    collection: str | None = None,
     properties_filter: Mapping[str, str | Sequence[str]] | None = None,
     processing: str | None = None,
     # --- shared ---
@@ -1838,7 +2005,28 @@ def run_inference(
     `properties_filter` narrows the catalog as in `create_training_data`; for
     `sentinel-1-rtc` list one orbit state, or both to opt in to the mixed median (two
     viewing geometries in one median). It must match what the model was trained on.
+
+    **`inputs=`** (ROI mode) replaces `collection`, `bands`, `properties_filter`, `processing`
+    and `catalog_filepath` as in `create_training_data`, with `archive_root=` in place of
+    `catalog_filepath`; `max_cloudcover` is not used. One input infers exactly as the scalar
+    arguments do; more than one raises until fusing several collections is supported.
     """
+    if inputs is None:
+        _check_no_archive_root(archive_root)
+        collection = config.SATELLITE_S2L2A if collection is None else collection
+    elif roi is None:
+        raise PreflightError("inputs= is for ROI mode: pass roi= too.")
+    else:
+        resolved = _build_inputs_args(inputs, archive_root, dict(
+            collection=collection, bands=bands, properties_filter=properties_filter,
+            processing=processing, catalog_filepath=catalog_filepath,
+        ))
+        if resolved["max_cloudcover"] is not None:
+            raise PreflightError("max_cloudcover is a download option; inference reads the "
+                                 "catalog as it is.")
+        collection, bands, properties_filter, processing, catalog_filepath = (
+            resolved[k] for k in ("collection", "bands", "properties_filter", "processing",
+                                  "catalog_filepath"))
     # Non-local storage is accepted for ROI mode + runner="aml" only; the pre-built-cubes
     # path and local ROI mode stay local.
     roi_mode = roi is not None

@@ -112,6 +112,16 @@ This is the field-by-field table (spec 34 §2a) — what the builder reads, and 
 this is what lets a no-mask build (`bands=["B04"]`) work even against a declaration
 that *has* a mask (spec 34 #35).
 
+## Band names are fixed when a collection is added
+
+A call with several collections (`inputs=[CollectionInput(...), ...]`) refuses two collections
+that share a band name. rise-eo therefore names the bands, once, when a collection is added: the
+collection's module declares `BANDS` next to `SHORT_NAME` (`s2l2a`: `config.S2L2A_ALL_BANDS`;
+`s1rtc`: `("vv", "vh")`), and `tests/test_spec214_p4.py` fails when two built-in collections
+declare the same name. A provider name that clashes with an existing collection (HLS's `B04` and
+`B8A` against Sentinel-2) is mapped to a new rise-eo name in that collection's spec, never
+renamed per call.
+
 ## Pointing a run at another collection is not a rename
 
 The verbs take `collection=`, but changing it and `bands=` is not enough. Read the declaration
