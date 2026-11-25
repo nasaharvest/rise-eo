@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import dataclasses
+import datetime
+import os
 
 import pytest
 
 import rise_eo
 from rise_eo import api
+from rise_eo.api import PreflightError
 
 # --- CollectionInput ---------------------------------------------------------------------
 
@@ -162,3 +165,205 @@ def test_scalar_download_is_unchanged(monkeypatch, tmp_path):
     with pytest.raises(api.PreflightError, match="processing=None"):
         rise_eo.download("roi.geojson", *WINDOW, ["B04"], str(tmp_path / "b"), max_tiles=5,
                          processing=None)
+
+
+# --- create_training_data(inputs=...) ----------------------------------------------------
+
+Y18 = ("2018-01-01", "2019-01-01")
+
+
+def _train(tmp_path, export, **kw):
+    import test_spec214_p3 as p3
+
+    args = dict(
+        label_polygons=p3._polys([("p18", *Y18)]), startdate=None, enddate=None,
+        mosaic_days="month", id_col="fid", label_col="crop",
+        export_folderpath=str(tmp_path / export),
+    )
+    args.update(kw)
+    return rise_eo.create_training_data(**args)
+
+
+def test_one_input_trains_exactly_as_the_scalar_arguments(tmp_path, monkeypatch):
+    import numpy as np
+    import test_spec214_p3 as p3
+
+    from rise_eo.workflows import runners
+
+    cat = p3._archive(tmp_path, monkeypatch)
+    monkeypatch.setattr(runners, "run_local",
+                        lambda csv, **kw: p3._run_rows(csv, []))
+    bands = ["B04", "B08", "SCL"]
+    scalar = _train(tmp_path, "scalar", catalog_filepath=cat, bands=bands)
+    fused = _train(tmp_path, "inputs", catalog_filepath=None, bands=None,
+                   archive_root=str(tmp_path / "a"),
+                   inputs=[rise_eo.CollectionInput("sentinel-2-l2a", bands)])
+
+    a, b = scalar.load(), fused.load()
+    assert set(a) == set(b)
+    for key in a:
+        assert np.array_equal(a[key], b[key]), key
+    assert (scalar.bands, scalar.n_pixels) == (fused.bands, fused.n_pixels)
+
+
+def test_download_leg_gets_the_inputs_arguments(tmp_path, monkeypatch):
+    import test_spec214_p3 as p3
+
+    class Stop(Exception):
+        pass
+
+    seen = []
+
+    def fake_download(**kw):
+        seen.append(kw)
+        raise Stop
+
+    monkeypatch.setattr(api, "_download_verb", fake_download)
+    ci = rise_eo.CollectionInput(
+        "sentinel-1-rtc", ["vv", "vh"], properties_filter={"sat:orbit_state": "descending"},
+        processing=None)
+    for runner in ("local", "aml"):
+        seen.clear()
+        kw = {"runner": runner, "runner_kwargs": {**AML, "root": str(tmp_path / "blob")}}
+        with pytest.raises(Stop):
+            _train(tmp_path, f"dl-{runner}", catalog_filepath=None, bands=None,
+                   archive_root=str(tmp_path / "arch"), inputs=[ci], download=True,
+                   max_tiles=5, **kw)
+        (call,) = seen
+        assert (call["collection"], call["bands"], call["properties_filter"]) == (
+            "sentinel-1-rtc", ["vv", "vh"], {"sat:orbit_state": "descending"})
+        assert call["dst_folderpath"] == str(tmp_path / "arch")
+        assert (call["runner"], call["processing"]) == (runner, "latest")
+    del p3
+
+
+def test_training_with_two_inputs_is_not_supported_yet(tmp_path):
+    with pytest.raises(PreflightError, match="not supported yet"):
+        _train(tmp_path, "x", catalog_filepath=None, bands=None, archive_root=str(tmp_path),
+               inputs=[S2, S1])
+
+
+@pytest.mark.parametrize("extra, match", [
+    ({"collection": "sentinel-2-l2a"}, r"inputs= replaces .*collection"),
+    ({"properties_filter": {"a": "b"}}, r"inputs= replaces .*properties_filter"),
+    ({"processing": "latest"}, r"inputs= replaces .*processing"),
+    ({"max_cloudcover": 5.0}, r"inputs= replaces .*max_cloudcover"),
+    ({"bands": ["B04"]}, r"inputs= replaces .*bands"),
+    ({"catalog_filepath": "x/sentinel-2-l2a/c.parquet"}, r"inputs= replaces .*catalog_filepath"),
+    ({"archive_root": None}, "needs archive_root"),
+])
+def test_training_inputs_exclusions(tmp_path, extra, match):
+    args = dict(catalog_filepath=None, bands=None, archive_root=str(tmp_path), inputs=[S1])
+    args.update(extra)
+    with pytest.raises(PreflightError, match=match):
+        _train(tmp_path, "x", **args)
+
+
+def test_training_archive_root_without_inputs_raises(tmp_path):
+    with pytest.raises(PreflightError, match="archive_root= goes with inputs="):
+        _train(tmp_path, "x", catalog_filepath="a/sentinel-2-l2a/c.parquet", bands=["B04"],
+               archive_root=str(tmp_path))
+
+
+def test_training_scalar_path_still_needs_a_catalog_filepath(tmp_path):
+    with pytest.raises(PreflightError, match="catalog_filepath is required"):
+        _train(tmp_path, "x", catalog_filepath=None, bands=["B04"])
+
+
+# --- run_inference(inputs=...) -----------------------------------------------------------
+
+
+def _infer(tmp_path, monkeypatch, **kw):
+    """ROI-mode inference with the tiler, runner and finalize faked; returns what the per-cell
+    `setup` was given."""
+    import geopandas as gpd
+    import pandas as pd
+    from shapely.geometry import box
+
+    import rise_eo.grid as _grid_mod
+    from rise_eo.workflows import runners as _runners
+
+    fresh = gpd.GeoDataFrame({"id": ["cell_a"]}, geometry=[box(0, 0, 1, 1)], crs="EPSG:4326")
+    given = {}
+
+    def fake_setup(*a, **setup_kw):
+        given.update(setup_kw)
+        os.makedirs(os.path.dirname(setup_kw["csv_filepath"]), exist_ok=True)
+        pd.DataFrame({"id": ["cell_a"], "export_folderpath": ["a"]}).to_csv(
+            setup_kw["csv_filepath"], index=False)
+
+    monkeypatch.setattr(_grid_mod, "roi_to_s2_grids", lambda *a, **k: fresh)
+    monkeypatch.setattr(api, "_ensure_bundle", lambda *a, **k: "bundle_path")
+    monkeypatch.setattr(api, "_configure_storage", lambda *a, **k: None)
+    monkeypatch.setattr(api._create_datacube, "setup", fake_setup)
+
+    class _Result:
+        returncode = 0
+
+    monkeypatch.setattr(_runners, "run_local_inference", lambda *a, **k: _Result())
+    monkeypatch.setattr(api, "_existing_outputs", lambda paths, **k: list(paths))
+    monkeypatch.setattr(api, "_finalize_outputs", lambda *a, **k: "DONE")
+    from test_api_roi import ROI, _Tiny
+
+    args = dict(
+        output_folderpath=str(tmp_path / "out"), roi=ROI,
+        startdate=datetime.datetime(2018, 6, 1), enddate=datetime.datetime(2018, 7, 11),
+        mosaic_days=20,
+    )
+    args.update(kw)
+    assert rise_eo.run_inference(_Tiny(), **args) == "DONE"
+    return given
+
+
+def test_one_input_infers_exactly_as_the_scalar_arguments(tmp_path, monkeypatch):
+    scalar = _infer(tmp_path / "s", monkeypatch, collection="sentinel-2-l2a",
+                    catalog_filepath=api.archive_catalog_filepath(str(tmp_path / "arch"),
+                                                                  "sentinel-2-l2a"),
+                    bands=["B04", "B08"])
+    via_inputs = _infer(tmp_path / "i", monkeypatch, archive_root=str(tmp_path / "arch"),
+                        inputs=[rise_eo.CollectionInput("sentinel-2-l2a", ["B04", "B08"])])
+    keys = ("catalog_filepath", "collection", "bands", "properties_filter", "processing",
+            "startdate", "enddate", "mosaic_days")
+    assert {k: scalar[k] for k in keys} == {k: via_inputs[k] for k in keys}
+    assert via_inputs["catalog_filepath"].endswith("sentinel-2-l2a/catalog.parquet")
+
+
+def test_inference_inputs_carry_the_inputs_filter_and_processing(tmp_path, monkeypatch):
+    got = _infer(tmp_path, monkeypatch, archive_root=str(tmp_path / "arch"),
+                 inputs=[rise_eo.CollectionInput(
+                     "sentinel-2-l2a", ["B04", "B08"], processing=">=05.00")])
+    assert got["processing"] == ">=05.00"
+
+
+def test_inference_with_two_inputs_is_not_supported_yet(tmp_path, monkeypatch):
+    with pytest.raises(PreflightError, match="not supported yet"):
+        _infer(tmp_path, monkeypatch, archive_root=str(tmp_path), inputs=[S2, S1])
+
+
+@pytest.mark.parametrize("extra, match", [
+    ({"collection": "sentinel-2-l2a"}, r"inputs= replaces .*collection"),
+    ({"bands": ["B04"]}, r"inputs= replaces .*bands"),
+    ({"catalog_filepath": "x/sentinel-2-l2a/c.parquet"}, r"inputs= replaces .*catalog_filepath"),
+    ({"archive_root": None}, "needs archive_root"),
+    ({"inputs": [rise_eo.CollectionInput("sentinel-2-l2a", ["B04"], max_cloudcover=5.0)]},
+     "max_cloudcover is a download option"),
+])
+def test_inference_inputs_exclusions(tmp_path, monkeypatch, extra, match):
+    args = dict(archive_root=str(tmp_path), inputs=[rise_eo.CollectionInput(
+        "sentinel-2-l2a", ["B04", "B08"])])
+    args.update(extra)
+    with pytest.raises(PreflightError, match=match):
+        _infer(tmp_path, monkeypatch, **args)
+
+
+def test_inference_archive_root_without_inputs_raises(tmp_path, monkeypatch):
+    with pytest.raises(PreflightError, match="archive_root= goes with inputs="):
+        _infer(tmp_path, monkeypatch, archive_root=str(tmp_path))
+
+
+def test_inference_inputs_need_roi_mode(tmp_path):
+    from test_api_roi import _Tiny
+
+    with pytest.raises(PreflightError, match="inputs= is for ROI mode"):
+        rise_eo.run_inference(_Tiny(), inference_datacubes=["x"], output_folderpath=str(tmp_path),
+                              archive_root=str(tmp_path), inputs=[S1])

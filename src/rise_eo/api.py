@@ -533,8 +533,8 @@ def _check_inputs(inputs, passed: Sequence[str]) -> list[str]:
         return [f"inputs must hold rise_eo.CollectionInput objects (got {bad[0]!r})."]
     errs = []
     if passed:
-        errs.append(f"inputs= replaces {list(passed)}: pass them on each CollectionInput, "
-                    "not alongside inputs=.")
+        errs.append(f"inputs= replaces {list(passed)}: do not pass them alongside inputs=; "
+                    "per-collection options go on each CollectionInput.")
     seen: dict[str, str] = {}
     for i in inputs:
         if i.collection in seen:
@@ -555,6 +555,32 @@ def _check_inputs(inputs, passed: Sequence[str]) -> list[str]:
                 errs.append(f"band {band!r} is named by both {owner[band]!r} and "
                             f"{i.collection!r}; a band name must belong to one collection.")
     return errs
+
+
+def _build_inputs_args(inputs, archive_root, passed: Mapping[str, object]) -> dict:
+    """The single-collection arguments of a build verb called with `inputs=`; raises
+    `PreflightError`. `passed` maps each scalar argument `inputs=` replaces to what the caller
+    gave it (`None` = not given)."""
+    errs = _check_inputs(inputs, [k for k, v in passed.items() if v is not None])
+    if archive_root is None:
+        errs.append("inputs= needs archive_root= (the root `download` wrote) in place of "
+                    "catalog_filepath.")
+    if not errs and len(inputs) > 1:
+        errs.append("fusing several collections is not supported yet: pass one input.")
+    _raise_preflight(errs)
+    one = inputs[0]
+    return dict(
+        collection=one.collection, bands=list(one.bands),
+        properties_filter=one.properties_filter, processing=one.processing,
+        max_cloudcover=one.max_cloudcover,
+        catalog_filepath=archive_catalog_filepath(archive_root, one.collection),
+    )
+
+
+def _check_no_archive_root(archive_root) -> None:
+    if archive_root is not None:
+        raise PreflightError("archive_root= goes with inputs=; without inputs= pass "
+                             "catalog_filepath=.")
 
 
 def download(
@@ -763,21 +789,23 @@ _download_verb = download  # internal alias: `create_training_data`'s `download`
 
 def create_training_data(
     label_polygons,
-    catalog_filepath: str,
+    catalog_filepath: str | None,
     startdate: datetime.datetime | None,
     enddate: datetime.datetime | None,
     mosaic_days: int | str,
-    bands: list[str],
+    bands: list[str] | None,
     id_col: str,
     export_folderpath: str,
     *,
+    inputs: Sequence[CollectionInput] | None = None,
+    archive_root: str | None = None,
     label_col: str | None = None,
     adapter=None,
     feature_sequence=None,
     aggregate=None,
     cores: int = 1,
     source: str = "mpc",
-    collection: str = config.SATELLITE_S2L2A,
+    collection: str | None = None,
     properties_filter: Mapping[str, str | Sequence[str]] | None = None,
     processing: str | None = None,
     download: bool = False,
@@ -869,8 +897,27 @@ def create_training_data(
     must be named for `collection`, and `download=True` fetches into the archive root two
     levels up.
 
-    Spec: 49, 58, 59.
+    **`inputs=`.** `inputs=[CollectionInput(...)]` replaces `collection`, `bands` (pass `None`),
+    `properties_filter`, `processing`, `max_cloudcover` and `catalog_filepath` (pass `None`):
+    passing both raises. Give `archive_root=`, the root `download` wrote; the catalog is
+    `{archive_root}/{collection}/catalog.parquet`. One input builds exactly as the scalar
+    arguments do; more than one raises until fusing several collections is supported.
+
+    Spec: 49, 58, 59, 214.
     """
+    if inputs is None:
+        _check_no_archive_root(archive_root)
+        if catalog_filepath is None:
+            raise PreflightError("catalog_filepath is required (or inputs= with archive_root=).")
+        collection = config.SATELLITE_S2L2A if collection is None else collection
+    else:
+        resolved = _build_inputs_args(inputs, archive_root, dict(
+            collection=collection, bands=bands, properties_filter=properties_filter,
+            processing=processing, max_cloudcover=max_cloudcover, catalog_filepath=catalog_filepath,
+        ))
+        collection, bands, properties_filter, processing, max_cloudcover, catalog_filepath = (
+            resolved[k] for k in ("collection", "bands", "properties_filter", "processing",
+                                  "max_cloudcover", "catalog_filepath"))
     _check_one_feature_transform(adapter, feature_sequence)
     if overwrite not in _VALID_OVERWRITE:
         raise PreflightError(
@@ -1888,13 +1935,15 @@ def run_inference(
     # --- ROI mode — mutually exclusive with inference_datacubes -------------
     roi=None,
     catalog_filepath: str | None = None,
+    inputs: Sequence[CollectionInput] | None = None,
+    archive_root: str | None = None,
     startdate: datetime.datetime | None = None,
     enddate: datetime.datetime | None = None,
     mosaic_days: int | str | None = None,
     bands: list[str] | None = None,
     grid_size_km: float = 5,
     scale_fact: float = 1.1,
-    collection: str = config.SATELLITE_S2L2A,
+    collection: str | None = None,
     properties_filter: Mapping[str, str | Sequence[str]] | None = None,
     processing: str | None = None,
     # --- shared ---
@@ -1956,7 +2005,28 @@ def run_inference(
     `properties_filter` narrows the catalog as in `create_training_data`; for
     `sentinel-1-rtc` list one orbit state, or both to opt in to the mixed median (two
     viewing geometries in one median). It must match what the model was trained on.
+
+    **`inputs=`** (ROI mode) replaces `collection`, `bands`, `properties_filter`, `processing`
+    and `catalog_filepath` as in `create_training_data`, with `archive_root=` in place of
+    `catalog_filepath`; `max_cloudcover` is not used. One input infers exactly as the scalar
+    arguments do; more than one raises until fusing several collections is supported.
     """
+    if inputs is None:
+        _check_no_archive_root(archive_root)
+        collection = config.SATELLITE_S2L2A if collection is None else collection
+    elif roi is None:
+        raise PreflightError("inputs= is for ROI mode: pass roi= too.")
+    else:
+        resolved = _build_inputs_args(inputs, archive_root, dict(
+            collection=collection, bands=bands, properties_filter=properties_filter,
+            processing=processing, catalog_filepath=catalog_filepath,
+        ))
+        if resolved["max_cloudcover"] is not None:
+            raise PreflightError("max_cloudcover is a download option; inference reads the "
+                                 "catalog as it is.")
+        collection, bands, properties_filter, processing, catalog_filepath = (
+            resolved[k] for k in ("collection", "bands", "properties_filter", "processing",
+                                  "catalog_filepath"))
     # Non-local storage is accepted for ROI mode + runner="aml" only; the pre-built-cubes
     # path and local ROI mode stay local.
     roi_mode = roi is not None
