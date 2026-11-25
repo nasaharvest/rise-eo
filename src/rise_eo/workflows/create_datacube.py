@@ -1163,8 +1163,8 @@ def run_create_datacube_windows(
         if not fs.exists(window_csv):
             continue
         with fs.open(window_csv, "r") as f:
-            df = pd.read_csv(f)
-        frames.append(df[df[COL_ID].astype(str).isin(w.ids)])
+            df = pd.read_csv(f, dtype={COL_ID: str})
+        frames.append(df[df[COL_ID].isin(w.ids)])
     merged = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
     if len(merged) == 0:
         raise NoWorkUnitsError("no polygon in any window had tiles in range/overlap.")

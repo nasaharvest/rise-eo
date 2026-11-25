@@ -210,9 +210,10 @@ def test_a_polygon_that_changes_window_moves_only_its_own_cube(tmp_path, monkeyp
     assert sorted(merged["id"]) == ["p18", "p19"]
 
 
-def test_a_window_with_no_imagery_does_not_stop_the_other(tmp_path, monkeypatch):
+def test_zero_padded_ids_are_not_dropped_by_the_per_window_csv_read(tmp_path, monkeypatch):
     cat = _archive(tmp_path, monkeypatch)
     monkeypatch.setattr(runners, "run_local", lambda csv, **kw: _run_rows(csv, []))
-    polys = _polys([("p18", *Y18), ("none", "2015-01-01", "2016-01-01")])
-    with pytest.raises(PreflightError, match="no catalog tiles intersect"):
-        _call(tmp_path, polys, catalog_filepath=cat)
+    td = _call(tmp_path, _polys([("001", *Y18), ("x19", *Y19)]), catalog_filepath=cat)
+    merged = pd.read_csv(tmp_path / "export" / "run" / "input.csv", dtype={"id": str})
+    assert sorted(merged["id"]) == ["001", "x19"]
+    assert len(set(td.load()["ids"])) == 2
