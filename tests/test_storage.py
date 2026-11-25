@@ -351,6 +351,25 @@ def test_rename_replaces_an_existing_file_atomically(tmp_path):
     assert not src.exists()
 
 
+def test_rename_of_a_directory_is_not_reported_as_a_permission_error(tmp_path):
+    """#196: files go through `os.replace`, but on Windows that call raises
+    `PermissionError` for a directory, which reads as an access problem rather than a
+    lost publish race. Directories stay on `os.rename`."""
+    import pytest
+
+    src = tmp_path / "stage"
+    src.mkdir()
+    (src / "bundle.json").write_text("loser")
+    dst = tmp_path / "v1"
+    dst.mkdir()
+    (dst / "bundle.json").write_text("winner")
+
+    with pytest.raises(OSError) as caught:
+        fs.rename(str(src), str(dst))
+
+    assert not isinstance(caught.value, PermissionError)
+
+
 # --- #80: fsspec backends ship in extras, so a missing one must name the extra ------
 # fsspec resolves a backend from the URL scheme and never gets imported by rise-eo, so
 # upstream raises "Install s3fs to access S3" -- a package name, not the extra that
