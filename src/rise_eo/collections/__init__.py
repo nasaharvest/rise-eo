@@ -93,5 +93,7 @@ def known() -> list[str]:
     return sorted(REGISTRY)
 
 
-register(_s2_l2a.COLLECTION_ID, _s2_l2a.DECLARATION, short_name=_s2_l2a.SHORT_NAME)
-register(_s1_rtc.COLLECTION_ID, _s1_rtc.DECLARATION, short_name=_s1_rtc.SHORT_NAME)
+BUILTIN_MODULES = (_s2_l2a, _s1_rtc)
+
+for _module in BUILTIN_MODULES:
+    register(_module.COLLECTION_ID, _module.DECLARATION, short_name=_module.SHORT_NAME)

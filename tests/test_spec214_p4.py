@@ -29,11 +29,15 @@ def test_collection_input_is_exported_frozen_and_keyword_only_after_bands():
 
 
 def test_builtin_collections_declare_pairwise_disjoint_bands():
-    from rise_eo.collections import s1_rtc, s2_l2a
+    from rise_eo.collections import BUILTIN_MODULES, REGISTRY
 
-    assert set(s2_l2a.BANDS) == set(rise_eo.config.S2L2A_ALL_BANDS)
-    assert tuple(s1_rtc.BANDS) == ("vv", "vh")
-    assert not set(s2_l2a.BANDS) & set(s1_rtc.BANDS)
+    assert {m.COLLECTION_ID for m in BUILTIN_MODULES} <= set(REGISTRY)
+    owner: dict[str, str] = {}
+    for module in BUILTIN_MODULES:
+        assert module.BANDS, f"{module.COLLECTION_ID} declares no BANDS"
+        for band in module.BANDS:
+            assert owner.setdefault(band, module.COLLECTION_ID) == module.COLLECTION_ID, (
+                f"band {band!r} is declared by both {owner[band]!r} and {module.COLLECTION_ID!r}")
 
 
 # --- download(inputs=...) ----------------------------------------------------------------
