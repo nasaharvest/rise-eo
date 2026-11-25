@@ -20,3 +20,14 @@ def test_collection_input_is_exported_frozen_and_keyword_only_after_bands():
     with pytest.raises(TypeError):
         rise_eo.CollectionInput("sentinel-1-rtc", ["vv"], {"a": "b"})
     assert "CollectionInput" in api.__all__
+
+
+# --- BANDS per collection ----------------------------------------------------------------
+
+
+def test_builtin_collections_declare_pairwise_disjoint_bands():
+    from rise_eo.collections import s1_rtc, s2_l2a
+
+    assert set(s2_l2a.BANDS) == set(rise_eo.config.S2L2A_ALL_BANDS)
+    assert tuple(s1_rtc.BANDS) == ("vv", "vh")
+    assert not set(s2_l2a.BANDS) & set(s1_rtc.BANDS)

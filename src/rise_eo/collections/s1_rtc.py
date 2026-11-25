@@ -18,6 +18,7 @@ from rise_eo.catalog.declaration import CollectionDeclaration
 
 COLLECTION_ID = "sentinel-1-rtc"
 SHORT_NAME = "s1rtc"
+BANDS = ("vv", "vh")
 
 DECLARATION = CollectionDeclaration(
     # VV and VH are both 10 m -- nothing to resample (D11).

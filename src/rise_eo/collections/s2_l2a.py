@@ -11,10 +11,12 @@ from collections.abc import Mapping
 
 import pandas as pd
 
+from rise_eo import config
 from rise_eo.catalog.declaration import S2_L2A_DECLARATION
 
 COLLECTION_ID = "sentinel-2-l2a"
 SHORT_NAME = "s2l2a"
+BANDS = tuple(config.S2L2A_ALL_BANDS)
 
 # The declaration itself is defined in `rise_eo.catalog.declaration` (not re-defined here) to
 # avoid a declaration<->collections import cycle: `builder._resolve_declaration`'s
