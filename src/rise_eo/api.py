@@ -399,7 +399,7 @@ def _polygon_windows(gdf, id_col: str, mosaic_days, bands) -> tuple[dict, list[s
                     f"{list(_WINDOW_COLUMNS)}; missing {missing}."]
     ids = [str(v) for v in gdf[id_col]]
     errs = []
-    dupes = sorted({i for i in ids if ids.count(i) > 1})
+    dupes = sorted(set(pd.Series(ids)[pd.Series(ids).duplicated()]))
     if dupes:
         errs.append(f"label_polygons has duplicate {id_col!r} values: {_show_ids(dupes)}.")
     starts = [_parse_window_date(v) for v in gdf["startdate"]]
