@@ -30,6 +30,8 @@ from rise_eo.raster.cog import to_cog
 from rise_eo.storage import fs
 from rise_eo.workflows import adapter_smoke, create_datacube, infer_shard, infer_task, runners
 
+pytestmark = pytest.mark.usefixtures("stub_lineage")
+
 CRS = "EPSG:32633"
 TRANSFORM = from_origin(500000, 5000000, 10, 10)
 TILE_UTM = box(500000, 4999960, 500040, 5000000)

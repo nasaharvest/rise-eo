@@ -22,7 +22,7 @@ import rasterio.crs
 import rasterio.transform
 import rasterio.warp
 
-from rise_eo import config
+from rise_eo import config, lineage
 from rise_eo.catalog import processing as processing_module
 from rise_eo.datacube.files import CUBE_METADATA_NAME, TRAINING_METADATA_NAME
 from rise_eo.storage import fs
@@ -51,6 +51,8 @@ def flatten(
     ]
     common_metadata = _check_metadata_consistency(metadata_filepaths)
     provenance = common_metadata.pop("provenance", None)
+    facts = common_metadata.pop("cube_facts")
+    facts.pop("provenance")
 
     data_list, coords_list, id_list, window_list = [], [], [], []
     label_list = [] if label_col is not None else None
@@ -72,6 +74,8 @@ def flatten(
     if provenance:
         # Spec 59 D9: versions and sources only (a training set spans thousands of granules).
         common_metadata["provenance"] = provenance
+    # Which granules, build code and overlapping MGRS tiles the cubes used: `lineage.json` reads these.
+    common_metadata.update(facts)
 
     fs.makedirs(export_folderpath)
     fs.save_npy(os.path.join(export_folderpath, "data.npy"), data)
@@ -91,9 +95,10 @@ def flatten(
 def _check_metadata_consistency(metadata_filepaths, check_attributes=("bands",
                                                                        "timestamps")):
     """All datacubes must agree on `bands` and on the NUMBER of `timestamps`; return the
-    first cube's."""
+    first cube's, plus the merged provenance and `cube_facts` (see `lineage.CubeFacts`)."""
     common = {attr: None for attr in check_attributes}
     provenance_blocks = []
+    facts = lineage.CubeFacts()
     for mfp in metadata_filepaths:
         metadata = fs.load_npy(mfp, allow_pickle=True)[()]
         for attr in check_attributes:
@@ -107,9 +112,11 @@ def _check_metadata_consistency(metadata_filepaths, check_attributes=("bands",
             elif attr != "timestamps" and cur != common[attr]:
                 raise ValueError(f"Attribute {attr} are not consistent.")
         provenance_blocks.append(metadata.get("provenance"))
+        facts.add(metadata)
     merged = processing_module.merge_provenance(provenance_blocks, with_ids=False)
     if merged:
         common["provenance"] = merged
+    common["cube_facts"] = facts.result()
     return common
 
 

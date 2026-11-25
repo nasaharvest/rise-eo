@@ -227,6 +227,15 @@ for model deploy / supervised training; **optional** when *generating* training 
 + flatten once, then iterate labels many times).
 _Avoid_: target, y (fine in code, not the domain term).
 
+**Lineage** (`lineage.json`):
+One readable JSON file next to a training set (`data.npy`) or an inference output (the STAC catalog) saying
+what it came from: sources (the geometry copied beside it, each collection's granule ids), the ordered process
+steps, the request, the library versions and the rise-eo version and commit that built the cubes
+(`code.build`) and that called the verb (`code.driver`). A model bundle saved with `training_data=` carries
+its **training lineage**, which inference compares with its own request.
+_Avoid_: provenance (that is the narrower per-cube record of granule ids and processing versions inside a
+cube's metadata), manifest.
+
 ## Control plane vs data plane
 
 **Driver**:

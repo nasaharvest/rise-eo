@@ -38,6 +38,7 @@ import site
 import sys
 import sysconfig
 
+from rise_eo import lineage as _lineage
 from rise_eo.storage import fs
 
 __all__ = [
@@ -47,7 +48,9 @@ __all__ = [
     "classify_adapter_source",
     "load",
     "manifest_code_files",
+    "manifest_files",
     "read_spec",
+    "read_training_lineage",
     "resolve_ref",
     "save",
 ]
@@ -479,6 +482,20 @@ def manifest_code_files(manifest: dict) -> list[str]:
     return [f"{root}/{rel}" for rel in code.get("files", [])]
 
 
+def manifest_files(manifest: dict) -> list[str]:
+    """Bundle-relative paths of every file a bundle holds besides `bundle.json`: the artifacts,
+    the embedded code and the training lineage."""
+    lineage = [manifest["training_lineage"]] if manifest.get("training_lineage") else []
+    return list(manifest.get("artifacts", {}).values()) + manifest_code_files(manifest) + lineage
+
+
+def read_training_lineage(bundle_path: str, manifest: dict | None = None) -> dict | None:
+    """The training `lineage.json` a bundle carries, or `None` when it was saved without one."""
+    manifest = read_spec(bundle_path) if manifest is None else manifest
+    rel = manifest.get("training_lineage")
+    return _lineage.read(os.path.join(str(bundle_path), rel)) if rel else None
+
+
 def _human_size(num_bytes: int) -> str:
     size = float(num_bytes)
     for unit in ("B", "kB", "MB"):
@@ -531,6 +548,7 @@ def save(
     overwrite: bool = True,
     code=None,
     requirements=None,
+    training_data=None,
     verbose: bool = True,
 ) -> str:
     """Write a bundle at `dst`: copy each artifact in, embed the adapter's source, and dump the
@@ -549,6 +567,10 @@ def save(
     `requirements` is an optional list of PEP 508 strings recorded for the smoke job to check.
     rise-eo never installs them.
 
+    `training_data` (a `TrainingData` or its `export_folderpath`) copies that training set's
+    `lineage.json` into the bundle, so `run_inference` can refuse inputs the model was not
+    trained on.
+
     Before anything is copied, two checks turn a bundle that would save fine and
     die on a cluster node into a `save`-time `ValueError` naming the fix: the adapter's own module
     must sit at the TOP of the resolved `code/` tree (#72), and every sibling import an embedded
@@ -560,6 +582,15 @@ def save(
     `verbose=False` silences it; the return value is unaffected either way.
     """
     dst = str(dst)
+    training_lineage = None
+    if training_data is not None:
+        export = str(getattr(training_data, "export_folderpath", training_data))
+        lineage_path = os.path.join(export, _lineage.LINEAGE_NAME)
+        if not fs.exists(lineage_path):
+            raise FileNotFoundError(
+                f"{lineage_path} is missing: build the training data with create_training_data "
+                "first (it writes lineage.json).")
+        training_lineage = _lineage.read(lineage_path)
     fs.makedirs(dst)
 
     artifacts_rel: dict[str, str] = {}
@@ -596,6 +627,9 @@ def save(
         code_rel = rels
 
     manifest = _manifest_from_adapter(adapter, artifacts_rel, code_rel, requirements)
+    if training_lineage is not None:
+        _lineage.write(os.path.join(dst, _lineage.LINEAGE_NAME), training_lineage)
+        manifest["training_lineage"] = _lineage.LINEAGE_NAME
     with fs.open(os.path.join(dst, BUNDLE_MANIFEST), "w") as f:
         json.dump(manifest, f, indent=2)
 

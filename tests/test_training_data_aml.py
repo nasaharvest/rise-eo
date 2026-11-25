@@ -29,10 +29,13 @@ from rise_eo.storage import fs
 from rise_eo.workflows import flatten as flatten_cli
 from rise_eo.workflows import runners
 
+pytestmark = pytest.mark.usefixtures("stub_lineage")
+
 JAN1 = datetime.datetime(2018, 1, 1)
 JAN1_NEXT = datetime.datetime(2019, 1, 1)
 TS = [pd.Timestamp("2018-06-01", tz="UTC"), pd.Timestamp("2018-07-01", tz="UTC")]
 TRANSFORM = from_origin(500000, 5000000, 10, 10)
+
 
 
 # --- shared fakes: AML client + job-builder (mirrors specs 36/37/38) --------------

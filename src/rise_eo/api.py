@@ -33,6 +33,7 @@ import pandas as pd
 
 from rise_eo import collections as _collections
 from rise_eo import config
+from rise_eo import lineage as _lineage
 from rise_eo import progress as _progress
 from rise_eo.bands import modify as _modify
 from rise_eo.catalog import processing as _processing
@@ -622,6 +623,32 @@ def _missing_fused_bands(required, components) -> list[str]:
     ]
 
 
+def _lineage_inputs(components, collection, bands, catalog_filepath, properties_filter,
+                    processing) -> list[dict]:
+    """One dict per input, in order, for `lineage.json`: its collection, native bands, catalog,
+    `properties_filter` and `processing`."""
+    if components:
+        return [{"collection": c.collection, "bands": list(c.bands), "catalog": c.catalog_filepath,
+                 "properties_filter": c.properties_filter, "processing": c.processing}
+                for c in components]
+    return [{"collection": collection, "bands": list(bands), "catalog": catalog_filepath,
+             "properties_filter": properties_filter, "processing": processing}]
+
+
+def _model_record(model_given, bundle_path: str | None, registry) -> dict:
+    """How a run named its model, the bundle that ran and that bundle's digest (a deployed
+    version's recorded digest when there is one). A live adapter run in-process has no bundle."""
+    deployed = registry_mod.read_deploy_record(bundle_path) if bundle_path else None
+    record = {
+        "given": _lineage.jsonable(model_given), "bundle_path": bundle_path,
+        "digest": None if bundle_path is None else (
+            (deployed or {}).get("digest") or registry_mod.content_digest(bundle_path)),
+    }
+    if isinstance(model_given, str) and _is_ref_shaped(model_given):
+        record["registry"] = registry
+    return record
+
+
 def _check_no_archive_root(archive_root) -> None:
     if archive_root is not None:
         raise PreflightError("archive_root= goes with inputs=; without inputs= pass "
@@ -955,8 +982,14 @@ def create_training_data(
     against the fused band list (each input's bands minus a mask band it drops after masking).
     With `download=True` every input is downloaded, all preflights first.
 
+    **`lineage.json`** lands next to `data.npy` with `geometry.geojson`: the sources, the process
+    steps, the request and the code that built the cubes (spec 214 D8). A training set without
+    it is not finished, so the next call redoes the flatten and reuses the cubes.
+
     Spec: 49, 58, 59, 214.
     """
+    request = _lineage.request_record("create_training_data", locals(),
+                                      drop=("export_folderpath", "run_folderpath"))
     fused = None
     all_inputs = inputs
     if inputs is None:
@@ -1069,6 +1102,8 @@ def create_training_data(
     elif run_folderpath is None:
         run_folderpath = os.path.join(export_folderpath, "run")
 
+    lineage_filepath = os.path.join(export_folderpath, _lineage.LINEAGE_NAME)
+
     # The top-level short-circuit. The target is the landed arrays, and its identity is
     # computed from the REQUEST, never from `input.csv` -- so checking it costs zero
     # catalog access, zero `setup`, zero dispatch, even on a call whose `input.csv` has
@@ -1087,7 +1122,7 @@ def create_training_data(
         stamp_filepath = os.path.join(export_folderpath, _FLATTEN_STAMP_NAME)
         if _stamp.matches_stamp(stamp_filepath, identity) and _flatten_outputs_present(
             export_folderpath, label_col=label_col, want_features=want_features,
-        ):
+        ) and fs.exists(lineage_filepath):
             print(f"[plan] target: {export_folderpath} arrays -> CURRENT "
                   f"(stamp matches this request)", flush=True)
             return _land_current_training_data(
@@ -1102,6 +1137,8 @@ def create_training_data(
     else:
         stamp = _stamp.read_stamp(os.path.join(export_folderpath, _FLATTEN_STAMP_NAME))
         stale_reason = "no stamp" if stamp is None else "stamp does not match this request"
+        if stamp is not None and not fs.exists(lineage_filepath):
+            stale_reason = f"{_lineage.LINEAGE_NAME} is missing"
     print(f"[plan] target: {export_folderpath} arrays -> STALE ({stale_reason})", flush=True)
     print(f"[plan]   flatten: {len(gdf)} cubes required", flush=True)
 
@@ -1232,7 +1269,10 @@ def create_training_data(
     # `"datacubes"` forces the flatten leg too: a caller who asked for a cube rebuild must
     # never be handed arrays flattened from the cubes being replaced.
     build_overwrite = overwrite in (True, "datacubes")
-    flatten_overwrite = overwrite in (True, "flatten", "datacubes")
+    # A training set without lineage.json is not finished: redo the flatten, reuse the cubes.
+    unfinished = (_stamp.read_stamp(os.path.join(export_folderpath, _FLATTEN_STAMP_NAME)) is not None
+                  and not fs.exists(lineage_filepath))
+    flatten_overwrite = overwrite in (True, "flatten", "datacubes") or unfinished
 
     print("[plan] will run: build -> flatten -> land", flush=True)
 
@@ -1277,6 +1317,16 @@ def create_training_data(
         filepath_col="datacube_filepath",
         adapter=adapter, feature_sequence=feature_sequence, aggregate=aggregate,
         overwrite=flatten_overwrite, runner=runner, runner_kwargs=flatten_runner_kwargs,
+    )
+
+    _lineage.write_training(
+        export_folderpath, request=request, runner=runner, gdf=gdf,
+        geometry_path=label_polygons if isinstance(label_polygons, str) else None,
+        id_col=id_col, label_col=label_col, mosaic_days=mosaic_days, startdate=startdate,
+        enddate=enddate, per_polygon=per_polygon, download=download, source=source,
+        adapter=adapter, feature_sequence=feature_sequence, aggregate=aggregate,
+        inputs=_lineage_inputs(fused, collection, bands, catalog_filepath, properties_filter,
+                               processing),
     )
 
     return TrainingData(
@@ -1989,13 +2039,17 @@ def _merge_mosaic(filepaths, nodata, *, reproject_to_dominant: bool, merge_crs):
 
 
 def _finalize_outputs(output_filepaths, output_folderpath, spec, merge, collection_id, dt,
-                      *, grids_filepath=None, merge_crs=None, geometries=None) -> InferenceResult:
+                      *, grids_filepath=None, merge_crs=None, geometries=None,
+                      lineage=None) -> InferenceResult:
     """Shared tail for both inference modes: STAC catalog + optional merge -> InferenceResult.
 
     `geometries`: `{output_filepath: geometry.geojson_path | shapely
     geometry}` — the true per-cell footprint, forwarded to `cog_outputs_to_items` in place of the
     raster bbox (see its docstring for the two accepted value shapes). `None` for geometry-less
     callers (see `_resolve_inference_pairs`).
+
+    `lineage`: the run's `lineage.json` document, already written to `output_folderpath`; the
+    STAC Collection and Items carry its statement and the Collection links the file.
     """
     items = _stac.cog_outputs_to_items(
         output_filepaths, geometries=geometries, collection_id=collection_id,
@@ -2005,6 +2059,9 @@ def _finalize_outputs(output_filepaths, output_folderpath, spec, merge, collecti
         items, os.path.join(output_folderpath, "stac"),
         catalog_id="rise-eo-inference", collection_id=collection_id,
         description="rise-eo inference outputs (STAC).",
+        processing=None if lineage is None else {
+            "software": {"rise-eo": lineage["software"]["rise-eo"]}, "lineage": lineage["statement"],
+            "lineage_filepath": os.path.join(output_folderpath, _lineage.LINEAGE_NAME)},
     )
     merged_filepath = None
     if merge:
@@ -2105,6 +2162,8 @@ def run_inference(
     arguments do; more than one infers over the fused cube `create_training_data` builds
     (the same build-and-join task), with `required_bands` checked against its band list.
     """
+    request = _lineage.request_record("run_inference", locals(), drop=("output_folderpath",))
+    model_given = model
     components = None
     if inputs is None:
         _check_no_archive_root(archive_root)
@@ -2164,7 +2223,7 @@ def run_inference(
             predict_batch_size=predict_batch_size, skip_nan=skip_nan, merge=merge,
             merge_crs=merge_crs, cores=cores, cubes_per_task=cubes_per_task, overwrite=overwrite,
             collection_id=collection_id, dt=dt, runner=runner, runner_kwargs=runner_kwargs,
-            registry=registry,
+            registry=registry, request=request, model_given=model_given,
         )
 
     # --- pre-built cubes path -------------
@@ -2189,6 +2248,9 @@ def run_inference(
     _raise_preflight(errs)
 
     fs.makedirs(output_folderpath)
+    resolved_model = model
+    print("[lineage] pre-built cubes: there is no request to compare with the model's training "
+          "lineage.", flush=True)
     # The pre-built-cubes path has no AML shape at all -- `cores==1` loads in-process here and
     # `cores>1` fans out to a LOCAL Snakemake runner -- so the driver always loads the bundle
     # on this machine and staging is unconditional. Done once per run, before either branch,
@@ -2209,8 +2271,18 @@ def run_inference(
             model, pairs, predict_batch_size=predict_batch_size, skip_nan=skip_nan,
             overwrite=overwrite, progress=progress,
         )
+    saved_bundle = os.path.join(output_folderpath, "_bundle")   # a live adapter run with cores>1
+    recorded_bundle = resolved_model if isinstance(resolved_model, str) else (
+        saved_bundle if fs.exists(os.path.join(saved_bundle, _bundle.BUNDLE_MANIFEST)) else None)
+    lineage_doc = _lineage.write_prebuilt(
+        output_folderpath, request=request, runner="local", cubes=[dc for dc, _ in pairs],
+        spec=spec, model=_model_record(model_given, recorded_bundle, registry),
+        training_lineage=(_bundle.read_training_lineage(resolved_model, spec)
+                          if isinstance(resolved_model, str) else None),
+        predict_batch_size=predict_batch_size, skip_nan=skip_nan,
+    )
     return _finalize_outputs(output_filepaths, output_folderpath, spec, merge, collection_id, dt,
-                             merge_crs=merge_crs, geometries=geometries)
+                             merge_crs=merge_crs, geometries=geometries, lineage=lineage_doc)
 
 
 def _ensure_bundle(model, output_folderpath, *, why, registry=None):
@@ -2259,7 +2331,7 @@ def _stage_local_bundle(model, output_folderpath):
     # is silent, and on the DRIVER the user would watch a prompt that does nothing for as
     # long as the download takes. Costs one `bundle.json` read + one `size` per file.
     manifest = _bundle.read_spec(model)
-    rels = list(manifest.get("artifacts", {}).values()) + _bundle.manifest_code_files(manifest)
+    rels = _bundle.manifest_files(manifest)
     total_bytes = sum(fs.size(os.path.join(model, rel)) for rel in rels)
     print(f"[stage] bundle <- {model} | {len(rels)} files, {total_bytes / 1e6:.1f} MB",
           flush=True)
@@ -2360,11 +2432,13 @@ def _run_inference_roi(
     grid_size_km, scale_fact, collection, properties_filter=None, processing=None,
     components=None,
     predict_batch_size, skip_nan, merge, merge_crs, cores, cubes_per_task, overwrite,
-    collection_id, dt, runner="local", runner_kwargs=None, registry=None,
+    collection_id, dt, runner="local", runner_kwargs=None, registry=None, request, model_given,
 ) -> InferenceResult:
     """ROI mode: preflight -> grid cells -> per-cell setup -> runner build+infer -> STAC/merge."""
     from rise_eo import grid as _grid
     from rise_eo.workflows import runners as _runners
+
+    resolved_model = model
 
     # --- preflight (cheap, before any build) ---
     for name, val in [("catalog_filepath", catalog_filepath), ("startdate", startdate),
@@ -2407,12 +2481,20 @@ def _run_inference_roi(
         missing = required - set(bands)
         if missing:
             errs.append(f"bands is missing model-required {sorted(missing)}.")
-    if want_t and days_ok:
-        got_t = compute_n_timestamps(startdate, enddate, mosaic_days)
-        if got_t != want_t:
-            errs.append(
-                f"startdate/enddate/mosaic_days give T={got_t} but the model needs T={want_t}."
-            )
+    got_t = compute_n_timestamps(startdate, enddate, mosaic_days) if days_ok else None
+    if want_t and days_ok and got_t != want_t:
+        errs.append(f"startdate/enddate/mosaic_days give T={got_t} but the model needs T={want_t}.")
+    lineage_inputs = (
+        _lineage_inputs(components, collection, bands, catalog_filepath, properties_filter, processing)
+        if components or bands is not None else None)
+    training_lineage = _bundle.read_training_lineage(model, spec) if isinstance(model, str) else None
+    if training_lineage is None:
+        print("[lineage] the model was saved without training lineage: the request is not "
+              "checked against it.", flush=True)
+    elif days_ok and lineage_inputs is not None:
+        errs += [f"the model's training lineage differs from this request: {e}"
+                 for e in _lineage.training_mismatches(
+                     training_lineage, lineage_inputs, mosaic_days=mosaic_days, n_timestamps=got_t)]
     roi_gdf = None
     try:
         if isinstance(roi, gpd.GeoDataFrame):
@@ -2557,9 +2639,22 @@ def _run_inference_roi(
     if not output_filepaths:
         raise RuntimeError("no per-cell outputs were produced.")
 
+    cube_folders = [os.path.dirname(p) for p in output_filepaths]
+    lineage_doc = _lineage.write_inference(
+        output_folderpath, request=request, runner=runner,
+        roi=roi_gdf if roi_gdf is not None else grids, roi_path=roi if isinstance(roi, str) else None,
+        grid_size_km=grid_size_km, scale_fact=scale_fact, n_cells=len(output_filepaths),
+        inputs=lineage_inputs,
+        facts=_lineage.cube_facts([os.path.join(f, CUBE_METADATA_NAME) for f in cube_folders]),
+        mosaic_days=mosaic_days, startdate=startdate, enddate=enddate, n_timestamps=got_t,
+        spec=spec, model=_model_record(
+            model_given, resolved_model if isinstance(resolved_model, str) else bundle_path, registry),
+        training_lineage=training_lineage, predict_batch_size=predict_batch_size, skip_nan=skip_nan,
+    )
     return _finalize_outputs(
         output_filepaths, output_folderpath, spec, merge, collection_id, dt,
         grids_filepath=grids_filepath, merge_crs=merge_crs, geometries=geometries,
+        lineage=lineage_doc,
     )
 
 

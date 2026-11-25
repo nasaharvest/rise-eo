@@ -11,10 +11,13 @@ import os
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from rise_eo import api
 from rise_eo.storage import fs
 from rise_eo.workflows import create_datacube as cd
+
+pytestmark = pytest.mark.usefixtures("stub_lineage")
 
 
 def _write_cube(folder, *, empty_metadata=False):

@@ -34,6 +34,8 @@ from rise_eo.model import BaseModelAdapter, bundle, registry
 from rise_eo.storage import fs
 from rise_eo.workflows import infer_shard, runners
 
+pytestmark = pytest.mark.usefixtures("stub_lineage")
+
 BANDS = ["B04", "B08"]
 EPSG = 32637
 

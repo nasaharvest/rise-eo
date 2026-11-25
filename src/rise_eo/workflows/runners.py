@@ -853,7 +853,7 @@ def _stage_bundle(bundle_path: str, dst_url: str) -> str:
         raw = f.read()
     with fs.open(os.path.join(dst_url, _bundle.BUNDLE_MANIFEST), "w") as f:
         f.write(raw)
-    rels = list(manifest.get("artifacts", {}).values()) + _bundle.manifest_code_files(manifest)
+    rels = _bundle.manifest_files(manifest)
     # Destination + total size print BEFORE the upload starts: this leg can be slow over VPN,
     # and it is the one silence costs most on.
     total_bytes = sum(fs.size(os.path.join(bundle_path, rel)) for rel in rels)
