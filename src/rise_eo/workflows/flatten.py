@@ -25,11 +25,10 @@ import argparse  # noqa: E402
 import json  # noqa: E402
 import time  # noqa: E402
 
-import pandas as pd  # noqa: E402
-
 from rise_eo import config  # noqa: E402
 from rise_eo.datacube import flatten as _flatten  # noqa: E402
 from rise_eo.storage import fs  # noqa: E402
+from rise_eo.workflows.unit_csv import read_unit_csv  # noqa: E402
 
 
 def _write_status(status_url: str, status: dict) -> None:
@@ -52,7 +51,7 @@ def run(
     cube must not be silently dropped from the reduce."""
     start = time.monotonic()
     with fs.open(input_csv, "r") as f:
-        df = pd.read_csv(f)
+        df = read_unit_csv(f, id_col)
 
     work_start_at = _dt.datetime.now(_dt.timezone.utc).isoformat()
     _flatten.flatten(

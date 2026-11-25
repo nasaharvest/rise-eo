@@ -30,11 +30,10 @@ import shutil  # noqa: E402
 import tempfile  # noqa: E402
 import time  # noqa: E402
 
-import pandas as pd  # noqa: E402
-
 from rise_eo.model import bundle as _bundle  # noqa: E402
 from rise_eo.storage import fs  # noqa: E402
 from rise_eo.workflows import runners  # noqa: E402
+from rise_eo.workflows.unit_csv import read_unit_csv  # noqa: E402
 
 EXPORT_FOLDERPATH_COL = "export_folderpath"
 
@@ -106,7 +105,7 @@ def run_infer_shard(
     `cores`/`cubes_per_task` default to `None` = the load-per-core default, computed here
     on the node from `os.cpu_count()` and the shard size (`_resolve_cores_and_group`)."""
     with fs.open(shard_csv_url, "r") as f:
-        shard_df = pd.read_csv(f)
+        shard_df = read_unit_csv(f)
 
     fd, local_csv = tempfile.mkstemp(suffix=".csv", prefix="rise-eo-infer-shard-")
     os.close(fd)

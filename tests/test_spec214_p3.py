@@ -268,4 +268,5 @@ def test_zero_padded_ids_are_not_dropped_by_the_per_window_csv_read(tmp_path, mo
     td = _call(tmp_path, _polys([("001", *Y18), ("x19", *Y19)]), catalog_filepath=cat)
     merged = pd.read_csv(tmp_path / "export" / "run" / "input.csv", dtype={"id": str})
     assert sorted(merged["id"]) == ["001", "x19"]
-    assert len(set(td.load()["ids"])) == 2
+    assert sorted(set(map(str, td.load()["ids"]))) == ["001", "x19"]
+    assert sorted(set(fs.load_npy(str(tmp_path / "export" / "ids.npy")).astype(str))) == ["001", "x19"]

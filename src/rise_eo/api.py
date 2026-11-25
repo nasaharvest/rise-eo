@@ -60,6 +60,7 @@ from rise_eo.storage.azure import storage_backend
 from rise_eo.workflows import create_datacube as _create_datacube
 from rise_eo.workflows import infer_only_task as _infer_only_task
 from rise_eo.workflows import stamp as _stamp
+from rise_eo.workflows.unit_csv import read_unit_csv
 
 __all__ = [
     "InferenceResult",
@@ -307,7 +308,7 @@ def _check_resume_identity(csv_filepath: str, grids: gpd.GeoDataFrame, output_fo
     blob (#50).
     """
     with fs.open(csv_filepath, "r") as f:
-        cached_ids = set(pd.read_csv(f)["id"].astype(str))
+        cached_ids = set(read_unit_csv(f)["id"].astype(str))
     fresh_ids = set(grids["id"].astype(str))
     if cached_ids == fresh_ids:
         return
@@ -1307,7 +1308,7 @@ def flatten_training_data(
     fs.makedirs(export_folderpath)
 
     with fs.open(input_csv, "r") as f:
-        input_df = pd.read_csv(f)
+        input_df = read_unit_csv(f, id_col)
     _check_input_csv_has_processing(input_df, input_csv)
 
     want_features = adapter is not None or feature_sequence is not None or aggregate is not None
@@ -1535,7 +1536,7 @@ def _resolve_inference_pairs(inference_datacubes, output_folderpath):
         dc_filepaths = [str(p) for p in inference_datacubes]
     elif isinstance(inference_datacubes, str) and inference_datacubes.endswith(".csv"):
         with fs.open(inference_datacubes, "r") as f:
-            df = pd.read_csv(f)
+            df = read_unit_csv(f)
         col = "datacube_filepath" if "datacube_filepath" in df.columns else df.columns[0]
         dc_filepaths = [str(p) for p in df[col]]
         if "id" in df.columns:
@@ -2246,7 +2247,7 @@ def _run_inference_roi(
 
     # Collect the per-cell outputs, plus each cell's true footprint for STAC geometry.
     with fs.open(csv_filepath, "r") as f:
-        rows = pd.read_csv(f)
+        rows = read_unit_csv(f)
     # Pass the footprint already held in memory (`grids`, tiled by THIS driver minutes ago)
     # rather than the geometry.geojson path `create_datacube.setup` wrote it to -- that would
     # be a sequential blob read per cell, fetching back geometry the driver itself authored.
@@ -2561,7 +2562,7 @@ def verify_adapter(
             )) from exc
 
         with fs.open(build_csv_filepath, "r") as f:
-            build_row = pd.read_csv(f).iloc[0]
+            build_row = read_unit_csv(f).iloc[0]
         # Landing is `storage.transfer`, exactly as `create_training_data` lands its compact
         # array -- the local cube becomes a first-class artifact.
         #
