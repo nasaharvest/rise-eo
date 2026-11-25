@@ -37,8 +37,11 @@ ready once the other gates hold, and say what waits in the PR description.
    `git diff --diff-filter=ADR --name-only <base> -- src/` prints nothing;
    `git diff --name-only <base> -- src/ ':(exclude)*.py'` prints nothing;
    `grep -rn "__doc__" src/rise_eo` prints nothing.
+   For one phase of a multi-phase spec, the maintainer may fold the run into a later run-book of the same
+   spec. The PR names that run-book and what it must check; the run-book lists it.
 
-The PR title becomes the release-note line. The maintainer labels and merges (merge commit).
+The PR title becomes the release-note line. Whoever merges applies one label and merges with a merge
+commit: the maintainer, or an agent session the maintainer has authorised (see `AGENTS.md`).
 
 ## Conventions
 
@@ -74,7 +77,8 @@ Each line points at the incident that taught it.
 ## Maintainer tasks
 
 - **Merge** with a merge commit once the four gates hold; apply one label (`breaking`, `feature`, `fix`,
-  `docs`, `internal`). After merging, fast-forward local `main` and delete the branch and worktree.
+  `docs`, `internal`). After merging, fast-forward local `main` and delete the branch and worktree. The
+  maintainer may delegate this to an agent session, under the conditions in `AGENTS.md`.
 - **Branch protection** (Settings → Branches → `main`): require a pull request, require the `test` status
   check, **no required approvals** (authors cannot approve their own PRs), merge commits only, no direct pushes.
   Once the repo is in the `nasaharvest` org **and** two or more maintainers are active, add `.github/CODEOWNERS`

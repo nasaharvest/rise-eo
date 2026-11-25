@@ -32,9 +32,11 @@ A git worktree has no `.venv`. Run tests there with
 Every change is a pull request. Work on a branch, push it, and open a draft PR. When gates 1–3 hold,
 mark it ready (`gh pr ready <N>`). If the review (gate 3) or the real run (gate 4) waits on the
 maintainer, mark it ready once the gates you can meet hold, and say what waits in the PR description.
-Only the maintainer merges, or an agent session whose instructions from the maintainer allow it; such a
-session merges only when gates 1–3 hold and gate 4 holds or is folded into a named run-book. Never push
-to `main`. The PR description holds the state of the work: what
+Only the maintainer merges, or an agent session whose instructions from the maintainer allow it. Such a
+session merges only when the four gates hold (gate 4 may be folded into a later run-book, as
+`CONTRIBUTING.md` gate 4 says), and applies the release label. It leaves to the maintainer a PR that adds
+or changes a spec or ADR, changes a rule file or CI, needs a real run now, has an unresolved finding, or
+comes from an outside contributor. Never push to `main`. The PR description holds the state of the work: what
 is done, what is next, and the review findings. The PR title becomes the line in the release notes.
 
 A PR merges when it passes four gates (details in `CONTRIBUTING.md`):
