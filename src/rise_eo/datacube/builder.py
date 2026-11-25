@@ -485,6 +485,8 @@ def build_datacube(
         )
         if on_given_grid:
             _blank_outside_shape(datacube, shape_gdf, reference_profile, nodata)
+            metadata["geotiff_metadata"] = {
+                **reference_profile, "dtype": datacube.dtype.name, "nodata": nodata}
         metadata["nodata"] = nodata
 
     with _instrument.timed(timings, "ops"):

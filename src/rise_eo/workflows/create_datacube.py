@@ -1190,7 +1190,13 @@ def _force_rebuild(csv_filepath: str) -> None:
     """
     with fs.open(csv_filepath, "r") as f:
         df = pd.read_csv(f)
-    for datacube_filepath in df["datacube_filepath"]:
+    cube_filepaths = list(df["datacube_filepath"])
+    # A fused unit's component cubes are rebuilt too, or the join would reuse stale ones.
+    for fusion_filepath in df.get("fusion_filepath", pd.Series(dtype=str)).dropna():
+        with fs.open(fusion_filepath, "r") as f:
+            cube_filepaths += [os.path.join(c["export_folderpath"], CUBE_NAME)
+                               for c in json.load(f)["components"]]
+    for datacube_filepath in cube_filepaths:
         metadata_filepath = os.path.join(
             os.path.dirname(datacube_filepath), CUBE_METADATA_NAME
         )

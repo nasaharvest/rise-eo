@@ -591,6 +591,14 @@ def _fused_components(inputs, archive_root) -> list[_create_datacube.Component]:
     ]
 
 
+def _processing_input_errors(processing, collection, components) -> list[str]:
+    """`processing=` errors for the scalar request, or for every component of a fused one."""
+    if not components:
+        return _processing.processing_errors(processing, collection=collection, allow_none=True)
+    return [e for c in components for e in _processing.processing_errors(
+        c.processing, collection=c.collection, allow_none=True)]
+
+
 def _fused_band_list(components) -> list[str]:
     """The fused cube's bands, in order: each component's bands minus the mask band its
     declaration drops after masking."""
@@ -1003,7 +1011,7 @@ def create_training_data(
         # The cross-cube invariant is still enforced -- flatten raises if two cubes
         # disagree on the timestamps axis.
     errs += _aggregate_errors(aggregate)
-    errs += _processing.processing_errors(processing, collection=collection, allow_none=True)
+    errs += _processing_input_errors(processing, collection, fused)
     for c in fused or [None]:
         errs += _check_catalog_collection_dir(
             catalog_filepath if c is None else c.catalog_filepath,
@@ -2363,7 +2371,7 @@ def _run_inference_roi(
                       ("enddate", enddate), ("mosaic_days", mosaic_days), ("bands", bands)]:
         if val is None:
             errs.append(f"roi mode requires {name}=.")
-    errs += _processing.processing_errors(processing, collection=collection, allow_none=True)
+    errs += _processing_input_errors(processing, collection, components)
     if catalog_filepath is not None:
         for c in components or [None]:
             errs += _check_catalog_collection_dir(

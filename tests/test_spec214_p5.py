@@ -75,12 +75,12 @@ def _catalog(tmp_path, name, *, collection, tile, origin, n_px, bands, values, d
 class Env:
     """A 200 m S2 granule grid and a smaller S1 grid shifted by half a pixel."""
 
-    def __init__(self, tmp_path, s1_days=("2018-06-03", "2018-06-14")):
+    def __init__(self, tmp_path, s1_days=("2018-06-03", "2018-06-14", "2018-07-05")):
         self.tmp = tmp_path
         self.s2_catalog = _catalog(
             tmp_path, "s2", collection="sentinel-2-l2a", tile=box(500000, 5000000, 500200, 5000200),
             origin=(500000, 5000200), n_px=20, bands=S2_BANDS, values=(S2_VALUE, 4),
-            dtype="uint16", nodata=0, days=("2018-06-02", "2018-06-12"))
+            dtype="uint16", nodata=0, days=("2018-06-02", "2018-06-12", "2018-07-03", "2018-07-13"))
         self.s1_catalog = _catalog(
             tmp_path, "s1", collection="sentinel-1-rtc", tile=box(499995, 5000085, 500115, 5000205),
             origin=(499995, 5000205), n_px=12, bands=S1_BANDS, values=(S1_VALUE,),
@@ -492,3 +492,74 @@ def test_inference_preflight_checks_required_bands_against_the_fused_list(tmp_pa
             "bundle", output_folderpath=str(tmp_path / "out"), roi=_polygons(env),
             inputs=[S2_IN, S1_IN], archive_root=str(tmp_path / "archive"), startdate=START,
             enddate=END, mosaic_days="month")
+
+
+# --- review round 1 ----------------------------------------------------------------------
+
+
+def test_a_forced_rebuild_rebuilds_every_component(tmp_path, monkeypatch):
+    env = Env(tmp_path)
+    row = env.setup().iloc[0]
+    _run_row(row)
+    create_datacube._force_rebuild(env.csv)
+    built = []
+    real = builder.build_datacube
+    monkeypatch.setattr(builder, "build_datacube", lambda **kw: built.append(kw) or real(**kw))
+    _run_row(row)
+    assert len(built) == 2                                   # both components, from the slices on disk
+    assert os.path.exists(os.path.join(row["export_folderpath"], "datacube.npy"))
+
+
+def test_processing_is_checked_for_every_input_before_any_file_is_written(tmp_path, monkeypatch):
+    from rise_eo import api
+
+    env = Env(tmp_path)
+    s1 = rise_eo.CollectionInput("sentinel-1-rtc", ["vv"], properties_filter=S1_FILTER,
+                                 processing=">=05.00")
+    with pytest.raises(PreflightError, match="sentinel-1-rtc"):
+        _train(env, tmp_path, inputs=[S2_IN, s1])
+    assert not (tmp_path / "export").exists()
+
+    monkeypatch.setattr(api, "_resolve_model_ref", lambda model, *a, **kw: model)
+    monkeypatch.setattr(api, "_model_spec", lambda model: {"required_bands": ["B08"],
+                                                           "n_timestamps": 1})
+    with pytest.raises(PreflightError, match="sentinel-1-rtc"):
+        rise_eo.run_inference(
+            "bundle", output_folderpath=str(tmp_path / "out"), roi=_polygons(env),
+            inputs=[S2_IN, s1], archive_root=str(tmp_path / "archive"), startdate=START,
+            enddate=END, mosaic_days="month")
+    assert not (tmp_path / "out").exists()
+
+
+def test_a_component_keeps_its_own_dtype_and_nodata_in_its_metadata(tmp_path):
+    env = Env(tmp_path)
+    row = env.setup().iloc[0]
+    _run_row(row)
+    fusion = json.load(open(row["fusion_filepath"]))["components"]
+    _, s1_md = _cube(fusion[1]["export_folderpath"])
+    _, s2_md = _cube(fusion[0]["export_folderpath"])
+    assert (s1_md["geotiff_metadata"]["dtype"], s1_md["geotiff_metadata"]["nodata"]) == (
+        "float32", -32768)
+    assert (s2_md["geotiff_metadata"]["dtype"], s2_md["geotiff_metadata"]["nodata"]) == ("uint16", 0)
+    assert s1_md["geotiff_metadata"]["transform"] == s2_md["geotiff_metadata"]["transform"]
+
+
+def test_per_polygon_windows_fuse_end_to_end(tmp_path, monkeypatch):
+    env = Env(tmp_path)
+    dispatched = []
+    _fake_runners(monkeypatch, dispatched)
+    g = _polygons(env).geometry.iloc[0]
+    polys = gpd.GeoDataFrame({
+        "fid": ["june", "july"], "crop": [0, 1],
+        "startdate": ["2018-06-01", "2018-07-01"], "enddate": ["2018-07-01", "2018-08-01"],
+        "geometry": [g, g]}, crs="EPSG:4326")
+    td = _train(env, tmp_path, label_polygons=polys, startdate=None, enddate=None)
+    out = td.load()
+    assert td.bands == ["B08", "vv"] and td.n_timestamps == 1
+    assert set(out["ids"]) == {"june", "july"}
+    assert set(out["window_starts"]) == {np.datetime64("2018-06-01", "ns"),
+                                         np.datetime64("2018-07-01", "ns")}
+    assert len(dispatched) == 2
+
+    _train(env, tmp_path, label_polygons=polys, startdate=None, enddate=None)   # satisfied
+    assert len(dispatched) == 2
