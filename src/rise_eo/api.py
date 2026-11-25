@@ -33,6 +33,7 @@ import pandas as pd
 
 from rise_eo import collections as _collections
 from rise_eo import config
+from rise_eo import lineage as _lineage
 from rise_eo import progress as _progress
 from rise_eo.bands import modify as _modify
 from rise_eo.catalog import processing as _processing
@@ -955,8 +956,14 @@ def create_training_data(
     against the fused band list (each input's bands minus a mask band it drops after masking).
     With `download=True` every input is downloaded, all preflights first.
 
+    **`lineage.json`** lands next to `data.npy` with `geometry.geojson`: the sources, the process
+    steps, the request and the code that built the cubes (spec 214 D8). A training set without
+    it is not finished, so the next call redoes the flatten and reuses the cubes.
+
     Spec: 49, 58, 59, 214.
     """
+    request = _lineage.request_record("create_training_data", locals(),
+                                      drop=("export_folderpath", "run_folderpath"))
     fused = None
     all_inputs = inputs
     if inputs is None:
@@ -1069,6 +1076,8 @@ def create_training_data(
     elif run_folderpath is None:
         run_folderpath = os.path.join(export_folderpath, "run")
 
+    lineage_filepath = os.path.join(export_folderpath, _lineage.LINEAGE_NAME)
+
     # The top-level short-circuit. The target is the landed arrays, and its identity is
     # computed from the REQUEST, never from `input.csv` -- so checking it costs zero
     # catalog access, zero `setup`, zero dispatch, even on a call whose `input.csv` has
@@ -1087,7 +1096,7 @@ def create_training_data(
         stamp_filepath = os.path.join(export_folderpath, _FLATTEN_STAMP_NAME)
         if _stamp.matches_stamp(stamp_filepath, identity) and _flatten_outputs_present(
             export_folderpath, label_col=label_col, want_features=want_features,
-        ):
+        ) and fs.exists(lineage_filepath):
             print(f"[plan] target: {export_folderpath} arrays -> CURRENT "
                   f"(stamp matches this request)", flush=True)
             return _land_current_training_data(
@@ -1102,6 +1111,8 @@ def create_training_data(
     else:
         stamp = _stamp.read_stamp(os.path.join(export_folderpath, _FLATTEN_STAMP_NAME))
         stale_reason = "no stamp" if stamp is None else "stamp does not match this request"
+        if stamp is not None and not fs.exists(lineage_filepath):
+            stale_reason = f"{_lineage.LINEAGE_NAME} is missing"
     print(f"[plan] target: {export_folderpath} arrays -> STALE ({stale_reason})", flush=True)
     print(f"[plan]   flatten: {len(gdf)} cubes required", flush=True)
 
@@ -1232,7 +1243,10 @@ def create_training_data(
     # `"datacubes"` forces the flatten leg too: a caller who asked for a cube rebuild must
     # never be handed arrays flattened from the cubes being replaced.
     build_overwrite = overwrite in (True, "datacubes")
-    flatten_overwrite = overwrite in (True, "flatten", "datacubes")
+    # A training set without lineage.json is not finished: redo the flatten, reuse the cubes.
+    unfinished = (_stamp.read_stamp(os.path.join(export_folderpath, _FLATTEN_STAMP_NAME)) is not None
+                  and not fs.exists(lineage_filepath))
+    flatten_overwrite = overwrite in (True, "flatten", "datacubes") or unfinished
 
     print("[plan] will run: build -> flatten -> land", flush=True)
 
@@ -1277,6 +1291,22 @@ def create_training_data(
         filepath_col="datacube_filepath",
         adapter=adapter, feature_sequence=feature_sequence, aggregate=aggregate,
         overwrite=flatten_overwrite, runner=runner, runner_kwargs=flatten_runner_kwargs,
+    )
+
+    _lineage.write_training(
+        export_folderpath, request=request, runner=runner, gdf=gdf,
+        geometry_path=label_polygons if isinstance(label_polygons, str) else None,
+        id_col=id_col, label_col=label_col, mosaic_days=mosaic_days, startdate=startdate,
+        enddate=enddate, per_polygon=per_polygon, download=download, source=source,
+        adapter=adapter, feature_sequence=feature_sequence, aggregate=aggregate,
+        inputs=[
+            {"collection": c.collection, "bands": list(c.bands), "catalog": c.catalog_filepath,
+             "properties_filter": c.properties_filter, "processing": c.processing}
+            for c in fused
+        ] if fused else [
+            {"collection": collection, "bands": list(bands), "catalog": catalog_filepath,
+             "properties_filter": properties_filter, "processing": processing}
+        ],
     )
 
     return TrainingData(

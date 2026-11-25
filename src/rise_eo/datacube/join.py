@@ -7,6 +7,8 @@ from collections.abc import Sequence
 
 import numpy as np
 
+from rise_eo import lineage
+
 FUSED_DTYPE = "float32"
 FUSED_NODATA = 0
 
@@ -28,8 +30,8 @@ def join_cubes(
     Every cube must carry identical `timestamps`, CRS, transform, height and width, or this
     raises. The result is `float32`, in the array and in every dtype field of its metadata;
     each component's nodata (`metadata["nodata"]`) becomes 0, the fused cube's single nodata.
-    `metadata["components"]` lists each component's collection, path (from `paths`), bands and
-    provenance, and
+    `metadata["components"]` lists each component's collection, path (from `paths`), bands,
+    provenance and builder code, and
     `metadata["band_collections"]` maps each band, in band order, to its collection.
     """
     if len(cubes) != len(collections) or len(cubes) < 2:
@@ -60,7 +62,7 @@ def join_cubes(
         components.append({"collection": collection,
                            "path": None if paths is None else paths[k],
                            "bands": list(md["bands"]),
-                           "provenance": md.get("provenance", {})})
+                           "provenance": md.get("provenance", {}), "code": md.get("code")})
         provenance.update(md.get("provenance") or {})
 
     metadata = copy.deepcopy(first_md)
@@ -69,6 +71,7 @@ def join_cubes(
     metadata["components"] = components
     metadata["nodata"] = FUSED_NODATA
     metadata["provenance"] = provenance
+    metadata["code"] = lineage.code_record()
     gt = dict(metadata["geotiff_metadata"])
     gt.update(dtype=FUSED_DTYPE, nodata=FUSED_NODATA)
     metadata["geotiff_metadata"] = gt

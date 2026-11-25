@@ -56,7 +56,7 @@ def _catalog(tmp_path, name, *, collection, tile, origin, n_px, bands, values, d
             _write_tif(folder / f"{band}.tif", np.full((1, n_px, n_px), value), transform,
                        dtype, nodata)
         rows.append({
-            "id": f"{name}_{i}", "acquisition_key": f"{name}_{i}", "processing_version": None,
+            "id": f"{name}_{i}", "collection": collection, "acquisition_key": f"{name}_{i}", "processing_version": None,
             "processing_datetime": None, "source": "mpc", "satellite": collection,
             "timestamp": pd.Timestamp(day, tz="UTC"), "s3url": f"s3://x/{name}{i}",
             "local_folderpath": str(folder), "files": ",".join(f"{b}.tif" for b in bands),

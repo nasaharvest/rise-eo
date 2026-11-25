@@ -20,3 +20,15 @@ def clean_fsspec_conf():
         os.environ.pop("FSSPEC_ABFSS_ANON", None)
     else:
         os.environ["FSSPEC_ABFSS_ANON"] = before_env
+
+
+@pytest.fixture
+def stub_lineage(monkeypatch):
+    """For tests that fake the flatten: its cubes never recorded lineage facts, so stub the writer."""
+    from rise_eo import api
+    from rise_eo.storage import fs
+
+    monkeypatch.setattr(
+        api._lineage, "write_training",
+        lambda export_folderpath, **kw: fs.write_text(
+            os.path.join(export_folderpath, api._lineage.LINEAGE_NAME), "{}"))

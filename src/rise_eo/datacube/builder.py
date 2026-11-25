@@ -29,7 +29,7 @@ import shapely
 from rasterio.crs import CRS
 from rasterio.features import geometry_mask
 
-from rise_eo import config
+from rise_eo import config, lineage
 from rise_eo.catalog import declaration as declaration_module
 from rise_eo.catalog import processing as processing_module
 from rise_eo.catalog.catalog import filter_by_properties, mixed_filter_keys
@@ -517,6 +517,7 @@ def build_datacube(
         # identity (never enters `params_key`): recorded so training and inference can be
         # compared (#101) and a stale cube diagnosed.
         metadata["provenance"] = _cube_provenance(catalog_subset)
+        metadata["code"] = lineage.code_record()
 
     with _instrument.timed(timings, "save"):
         fs.makedirs(export_folderpath)

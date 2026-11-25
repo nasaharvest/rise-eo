@@ -21,6 +21,8 @@ from rise_eo import collections as _collections
 from rise_eo.storage import fs
 from rise_eo.workflows import create_datacube
 
+pytestmark = pytest.mark.usefixtures("stub_lineage")
+
 
 def _make_catalog(cat_path, tmp_path):
     rows = []

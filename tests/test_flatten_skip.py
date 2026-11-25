@@ -16,8 +16,11 @@ from rise_eo import api
 from rise_eo.storage import fs
 from rise_eo.workflows import stamp as stamp_mod
 
+pytestmark = pytest.mark.usefixtures("stub_lineage")
+
 T = 2
 BANDS = ["B04", "B08"]
+
 
 
 def _write_flatten_outputs(export_folderpath, *, n_px=3):

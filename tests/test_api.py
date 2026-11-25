@@ -19,6 +19,8 @@ import shapely.geometry
 import rise_eo
 from rise_eo import api
 
+pytestmark = pytest.mark.usefixtures("stub_lineage")
+
 JAN1 = datetime.datetime(2018, 1, 1)
 JAN1_NEXT = datetime.datetime(2019, 1, 1)
 
