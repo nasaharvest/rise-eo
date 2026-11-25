@@ -74,7 +74,7 @@ jobs:
         run: python scripts/docs_kwarg_sweep.py
       - name: Tests (the `network` marker is opt-in, so it stays off)
         if: ${{ !cancelled() && steps.changes.outputs.code == 'true' }}
-        run: pytest -q -rs --report-log=pytest-log.jsonl --ignore=tests/test_docs.py --ignore=tests/test_notebooks.py
+        run: pytest -q -n auto -rs --report-log=pytest-log.jsonl --ignore=tests/test_docs.py --ignore=tests/test_notebooks.py
       - name: Open an issue when the weekly run fails
         if: failure() && github.event_name == 'schedule'
         # Precedent: xarray's upstream-dev-ci.yaml (spec 102 section 7), which pins this same SHA.

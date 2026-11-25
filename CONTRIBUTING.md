@@ -7,7 +7,7 @@ inbound = outbound). No CLA, no sign-off line. Agents: also read `AGENTS.md`.
 
 ```bash
 python3.11 -m venv .venv && source .venv/bin/activate && pip install -e ".[dev,local,s3,notebooks,grid,azure,aml,mpc,titiler,serving]"
-.venv/bin/python -m pytest -q && .venv/bin/ruff check src/ tests/
+.venv/bin/python -m pytest -q -n auto && .venv/bin/ruff check src/ tests/
 ```
 
 ## Every change is a pull request that passes four gates
