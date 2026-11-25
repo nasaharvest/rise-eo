@@ -1146,6 +1146,9 @@ def _flatten_identity_from_windows(gdf, windows: dict, *, startdate, enddate, **
             gdf[gdf[id_col].astype(str).isin(w_ids)], startdate=w_start, enddate=w_end, **kw)
         for (w_start, w_end), w_ids in windows.items()
     ]
+    # A window whose polygons are all known-empty has no row in `input.csv`, so it adds
+    # nothing to the identity computed from there.
+    parts = [part for part in parts if part["cubes"]] or parts[:1]
     identity = parts[0]
     identity["cubes"] = sorted(c for part in parts for c in part["cubes"])
     for key in _WINDOW_COLUMNS:

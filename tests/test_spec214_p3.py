@@ -225,6 +225,23 @@ def test_a_window_with_no_imagery_does_not_stop_the_other(tmp_path, monkeypatch,
     assert set(td.load()["ids"]) == {"p18"}
 
 
+def test_a_repeat_call_with_an_all_known_empty_window_short_circuits(tmp_path, monkeypatch, capsys):
+    cat = _archive(tmp_path, monkeypatch)
+    dispatched = []
+    monkeypatch.setattr(runners, "run_local",
+                        lambda csv, **kw: (dispatched.append(csv), _run_rows(csv, [])))
+    monkeypatch.setattr(api, "_download_verb", lambda **kw: None)
+    polys = _polys([("p18", *Y18), ("none", "2015-01-01", "2016-01-01")])
+    kw = {"download": True, "max_tiles": 5}
+    _call(tmp_path, polys, catalog_filepath=cat, **kw)
+    dispatched.clear()
+    capsys.readouterr()
+
+    _call(tmp_path, polys, catalog_filepath=cat, **kw)
+
+    assert "CURRENT" in capsys.readouterr().out and dispatched == []
+
+
 def test_a_request_with_no_imagery_in_any_window_raises(tmp_path, monkeypatch):
     cat = _archive(tmp_path, monkeypatch)
     polys = _polys([("a", "2015-01-01", "2016-01-01"), ("b", "2016-01-01", "2017-01-01")])
