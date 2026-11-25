@@ -84,6 +84,15 @@ catalog = rise_eo.download(
   by default: when you build, pick one with `properties_filter={"sat:orbit_state": "ascending"}`.
   To median both on purpose, list both, `{"sat:orbit_state": ["ascending", "descending"]}`; the two
   passes view a field from different sides and incidence angles, so that median mixes two geometries.
+- **Several collections in one call.** `inputs=[rise_eo.CollectionInput("sentinel-2-l2a", [...],
+  max_cloudcover=60), rise_eo.CollectionInput("sentinel-1-rtc", ["vv", "vh"], ...)]` replaces
+  `collection`, `bands` (pass `None`), `properties_filter`, `processing` and `max_cloudcover`; passing
+  both raises. Each collection may appear once and each band name once. rise-eo checks every input
+  before the first download, so a bad Sentinel-1 input fails before the Sentinel-2 download is paid
+  for. `download` then returns `{collection: catalog_filepath}`. `create_training_data` and
+  `run_inference` take the same `inputs=` with `archive_root="data/imagery"` in place of
+  `catalog_filepath`; one input builds exactly as the scalar arguments do, and more than one raises
+  until fused cubes land.
 
 ## 2. Build training data
 
