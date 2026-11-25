@@ -95,6 +95,11 @@ bundle_dir = bundle.save(adapter, {"model": "rf.joblib"}, "path/to/bundle")
 bundle.read_spec(bundle_dir)   # the model-free manifest -- no import, no model load
 ```
 
+Pass `training_data=` (the `TrainingData` that `create_training_data` returned, or its
+`export_folderpath`) to copy that training set's `lineage.json` into the bundle. `run_inference` then
+refuses a request whose collections, bands, `properties_filter`, period or T differ from what the model was
+trained on. A bundle saved without it runs, with one printed line saying nothing was checked.
+
 The bundle is a folder: `bundle.json` (the `module:attr` adapter reference + the declarations from
 step 1 + relative artifact paths) plus the artifact file(s). Two things make this the shippable
 unit, not just a convenience:

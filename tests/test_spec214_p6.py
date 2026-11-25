@@ -27,7 +27,7 @@ from rise_eo import api, lineage
 from rise_eo.datacube import builder
 from rise_eo.model import BaseModelAdapter
 from rise_eo.model import bundle as bundle_mod
-from rise_eo.storage import fs  # noqa: F401
+from rise_eo.storage import fs
 
 
 def _lineage_of(td):
@@ -372,3 +372,10 @@ def test_inference_on_prebuilt_cubes_prints_one_line_and_writes_a_short_lineage(
     assert doc["sources"] == {"inference_datacubes": [cube]}
     assert [s["step"] for s in doc["process_steps"]] == ["predict"]
     assert doc["model"]["digest"].startswith("sha256:")
+
+
+def test_a_lineage_version_this_rise_eo_does_not_read_raises(tmp_path):
+    path = str(tmp_path / "lineage.json")
+    fs.write_text(path, json.dumps({"lineage_version": 99}))
+    with pytest.raises(ValueError, match=r"lineage_version 99.*reads \[1\]"):
+        lineage.read(path)

@@ -171,6 +171,13 @@ result = rise_eo.run_inference(
 work, and writes one COG per grid cell plus a STAC catalog. Bundling is covered in
 [`docs/howto/bundle-your-model.md`](docs/howto/bundle-your-model.md).
 
+Every training set and every inference output carries a `lineage.json` (next to `data.npy`, or next to the
+STAC catalog) saying where it came from: the geometry (copied beside it as `geometry.geojson`), the
+granules each collection used, the ordered process steps, the request, the library versions and the
+rise-eo version and commit that built the cubes. `rise_eo.save_bundle(..., training_data=td)` copies the
+training set's `lineage.json` into the bundle, and `run_inference` refuses a request whose collections,
+bands, `properties_filter`, period or T differ from it, before any job starts.
+
 To share a model, `rise_eo.deploy` publishes a saved bundle to a registry. It refuses a bundle with no
 `requirements`, and first runs the bundle on one Azure ML node with the image you name, so it takes
 the same `runner_kwargs` as [step 4](#4-scale-out-on-azure-ml). `run_inference` then takes the returned

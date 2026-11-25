@@ -78,6 +78,7 @@ where they are; the location is an argument, optionally defaulted from user conf
 | `rise_eo/sources/` | `cdse.py`, `mpc.py` — discover + fetch granules. `_s2_radiometry.py` derives offset/scale from the processing baseline. `download_cli.py` is the safe shell runner. |
 | `rise_eo/catalog/` | `catalog.py` = `TileCatalog`, the GeoParquet query format. `stac.py` = an **additive export view**; `stac_geoparquet.py` exports it in the form pgSTAC loads. `declaration.py` carries radiometry through. `inspect_cli.py` / `restamp_cli.py` are operator tools. |
 | `rise_eo/datacube/` | `builder.py` merges granules into one cube per geometry; `_instrument.py` the opt-in timing sidecars; `ops.py` array transforms; `join.py` joins cubes of several collections along the band axis; `flatten.py` the reduce into training arrays. |
+| `rise_eo/lineage.py` | `lineage.json`: the sources and ordered process steps of a training set or an inference output, the request, the library versions and the code that built the cubes; the D9 comparison of a request with a model's training lineage. |
 | `rise_eo/bands/` | band math on the 5-D contract. |
 | `rise_eo/raster/` | rasterio primitives: `cog.py` (COG conversion, remote-dst branch), `images.py`. **The home of the GDAL/VSI exception to invariant 1** — the mosaic path in `api.py` and the COG writer in `model/engine.py` also open rasters directly, and are the only other places that may. |
 | `rise_eo/grid.py` | `roi_to_s2_grids` — an ROI becomes S2 grid cells, one cell = one work unit. |
@@ -169,6 +170,17 @@ reuses finished components), and joins them (`datacube/join.py`) into the fused 
 `datacube.npy` is the resume signal. A component built onto a given grid is read with the shape buffered by two
 reference pixels and set to nodata outside the shape rasterized on that grid (`all_touched=True`). The flatten
 skip identity and the known-empty manifest key on the fused segment, so a change to either input moves them.
+
+Each cube's metadata records the rise-eo version and commit of the process that built it (a git checkout's
+`HEAD` and dirty flag, or the commit pip recorded for a git-ref install; version only otherwise), and a
+fused cube keeps its components' too. `flatten` keeps the granule ids, the distinct build code and the MGRS
+tiles a cube used more than one of, in the training metadata, so the driver writes `lineage.json` from the
+landed arrays and never re-reads the cubes; the file records `code.driver` (the process that called the
+verb) and `code.build` (every distinct build). `lineage.json` is an output: a training set without it is
+redone from the flatten step on the next call, with the cubes reused. A bundle saved with `training_data=`
+holds the training `lineage.json` (listed in `bundle.json` as `training_lineage`, so the registry digest
+covers it), and ROI-mode preflight compares it with the request. Inference on pre-built cubes has no request
+to compare, so it prints one line and writes a short lineage (cube paths, model, `predict`).
 
 **Code that looks simplifiable but is not:**
 
