@@ -53,6 +53,11 @@ else it is the collection id with every character outside `[a-z0-9]` removed. Tw
 The ISO 8601 duration in a cube path: `P1M` for `mosaic_days="month"`, `P<n>D` for an `int`.
 _Avoid_: `m20`, mosaic length.
 
+**Window start** (`window_starts.npy`):
+The UTC start of the window a training sample was built over: its cube's first timestamp. A training set
+whose polygons have their own windows has one per sample, in the order of `ids.npy`; `metadata["timestamps"]`
+is only the first cube's axis. Every polygon still gives the same T.
+
 **Collection declaration** (`CollectionDeclaration`):
 The collection-level facts the datacube builder needs — reference band, mask spec, nodata, mosaic
 method — registered per collection id and stamped into the catalog so an artifact self-describes.

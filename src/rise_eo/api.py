@@ -170,6 +170,13 @@ def _as_gdf(label_polygons) -> gpd.GeoDataFrame:
 
 
 def _check_window(startdate, enddate, mosaic_days, bands) -> list[str]:
+    errs = _check_dates(startdate, enddate, mosaic_days)
+    if not bands:
+        errs.append("bands must be a non-empty list.")
+    return errs
+
+
+def _check_dates(startdate, enddate, mosaic_days) -> list[str]:
     errs = []
     start = pd.to_datetime(startdate, utc=True)
     end = pd.to_datetime(enddate, utc=True)
@@ -182,8 +189,6 @@ def _check_window(startdate, enddate, mosaic_days, bands) -> list[str]:
     except ValueError as exc:
         errs.append(str(exc))
         mosaic_days = None
-    if not bands:
-        errs.append("bands must be a non-empty list.")
     if start < end and mosaic_days is not None and compute_n_timestamps(start, end, mosaic_days) < 1:
         errs.append("date window yields T < 1 timestamps.")
     return errs
@@ -366,21 +371,88 @@ def _normalize_window(startdate, enddate) -> tuple[pd.Timestamp | None, pd.Times
     return start, end, errs
 
 
+_WINDOW_COLUMNS = ("startdate", "enddate")
+
+
+def _parse_window_date(value) -> pd.Timestamp | None:
+    """A UTC `Timestamp`, or `None` for an empty, numeric or unparsable cell."""
+    if isinstance(value, (bool, int, float, np.number)):
+        return None
+    try:
+        ts = pd.to_datetime(value, utc=True)
+    except (ValueError, TypeError):
+        return None
+    return None if pd.isna(ts) else ts
+
+
+def _show_ids(ids, limit: int = 20) -> str:
+    shown = ", ".join(str(i) for i in ids[:limit])
+    return f"[{shown}{f', ... +{len(ids) - limit} more' if len(ids) > limit else ''}]"
+
+
+def _polygon_windows(gdf, id_col: str, mosaic_days, bands) -> tuple[dict, list[str]]:
+    """`{(start, end): [ids]}` from the `startdate`/`enddate` columns, and the errors: an empty
+    or unparsable date, duplicate ids, a bad window, or polygons that give different T."""
+    missing = [c for c in _WINDOW_COLUMNS if c not in gdf.columns]
+    if missing:
+        return {}, [f"startdate=None and enddate=None need label_polygons columns "
+                    f"{list(_WINDOW_COLUMNS)}; missing {missing}."]
+    ids = [str(v) for v in gdf[id_col]]
+    errs = []
+    dupes = sorted(set(pd.Series(ids)[pd.Series(ids).duplicated()]))
+    if dupes:
+        errs.append(f"label_polygons has duplicate {id_col!r} values: {_show_ids(dupes)}.")
+    starts = [_parse_window_date(v) for v in gdf["startdate"]]
+    ends = [_parse_window_date(v) for v in gdf["enddate"]]
+    bad = [i for i, s, e in zip(ids, starts, ends) if s is None or e is None]
+    if bad:
+        errs.append(f"empty or unparsable startdate/enddate for ids: {_show_ids(bad)}.")
+    if not bands:
+        errs.append("bands must be a non-empty list.")
+    if errs:
+        return {}, errs
+    windows: dict = {}
+    for i, s, e in zip(ids, starts, ends):
+        windows.setdefault((s, e), []).append(i)
+    windows = dict(sorted(windows.items()))
+    ids_by_t: dict[int, list[str]] = {}
+    for (s, e), w_ids in windows.items():
+        window_errs = _check_dates(s, e, mosaic_days)
+        errs += [f"ids {_show_ids(w_ids)}: {err}" for err in window_errs]
+        if not window_errs:
+            ids_by_t.setdefault(compute_n_timestamps(s, e, mosaic_days), []).extend(w_ids)
+    if len(ids_by_t) > 1:
+        listing = "; ".join(f"T={t}: {_show_ids(v)}" for t, v in sorted(ids_by_t.items()))
+        errs.append(f"polygons give different T for mosaic_days={mosaic_days!r} ({listing}); "
+                    "every polygon needs the same T.")
+    return windows, errs
+
+
 # --- result handle -----------------------------------------------------------
 
 @dataclass
 class TrainingData:
     """Handle to a completed training-data build (paths; lazy-load arrays)."""
 
-    export_folderpath: str      # data.npy / ids.npy / labels.npy / coords.npy / metadata.pickle.npy
+    export_folderpath: str      # data.npy / ids.npy / window_starts.npy / labels.npy / coords.npy / metadata.pickle.npy
     run_folderpath: str         # per-field datacubes + input.csv
     n_pixels: int
     n_timestamps: int
     bands: list[str]
     feature_bands: list[str] | None = None   # set when a feature transform was applied
 
+    def _load_window_starts(self):
+        path = os.path.join(self.export_folderpath, "window_starts.npy")
+        if not fs.exists(path):
+            raise FileNotFoundError(
+                f"{path} is missing: this training set was written before window_starts.npy "
+                "existed. Re-run create_training_data (or flatten_training_data with "
+                "overwrite=True) to write it."
+            )
+        return fs.load_npy(path)
+
     def load(self) -> dict:
-        """Load the arrays into memory: data/ids/coords/metadata (+ labels if present).
+        """Load the arrays into memory: data/ids/window_starts/coords/metadata (+ labels if present).
 
         When a feature transform was applied (via `adapter=`/`feature_sequence=`), also loads
         `features`/`feature_ids`/`feature_labels` (the model-ready, possibly aggregated arrays).
@@ -388,6 +460,7 @@ class TrainingData:
         out = {
             "data": fs.load_npy(os.path.join(self.export_folderpath, "data.npy")),
             "ids": fs.load_npy(os.path.join(self.export_folderpath, "ids.npy")),
+            "window_starts": self._load_window_starts(),
             "coords": fs.load_npy(os.path.join(self.export_folderpath, "coords.npy")),
             "metadata": fs.load_npy(
                 os.path.join(self.export_folderpath, TRAINING_METADATA_NAME), allow_pickle=True
@@ -572,8 +645,8 @@ _download_verb = download  # internal alias: `create_training_data`'s `download`
 def create_training_data(
     label_polygons,
     catalog_filepath: str,
-    startdate: datetime.datetime,
-    enddate: datetime.datetime,
+    startdate: datetime.datetime | None,
+    enddate: datetime.datetime | None,
     mosaic_days: int | str,
     bands: list[str],
     id_col: str,
@@ -644,6 +717,13 @@ def create_training_data(
     `label_col` is optional: when omitted, no `labels.npy` is written and `ids.npy` is the
     join key for labels joined in later, without re-flattening.
 
+    **Per-polygon windows:** pass `startdate=None, enddate=None` and give `label_polygons`
+    `startdate` and `enddate` columns (read as UTC); each polygon then has its own window.
+    Every polygon must give the same T for `mosaic_days`, checked before any download or
+    build; an empty or unparsable date, a duplicate id, or scalar dates alongside those
+    columns raises. One download and one set of cubes per distinct window, one flatten;
+    `window_starts.npy` holds each sample's window start.
+
     `runner="aml"` dispatches download + the build fan-out + the flatten reduce onto an Azure
     ML cluster; `runner_kwargs` carries `cluster=`/`environment=`/`root=`/`identity_client_id=`
     (see `workflows.runners`).
@@ -684,9 +764,16 @@ def create_training_data(
     # despite naming the identical band.
     bands = _native_bands(collection, bands)
 
-    startdate, enddate, date_errs = _normalize_window(startdate, enddate)
+    per_polygon = startdate is None and enddate is None
+    if (startdate is None) != (enddate is None):
+        date_errs = ["startdate and enddate must both be dates, or both None (per-polygon "
+                     "windows read from label_polygons' startdate/enddate columns)."]
+    elif per_polygon:
+        date_errs = []
+    else:
+        startdate, enddate, date_errs = _normalize_window(startdate, enddate)
     errs = _check_local_seams(runner, storage) + date_errs
-    if not date_errs:
+    if not date_errs and not per_polygon:
         errs += _check_window(startdate, enddate, mosaic_days, bands)
     if adapter is not None:
         req = _native_bands(collection, getattr(adapter, "required_bands", []) or [])
@@ -702,6 +789,7 @@ def create_training_data(
     errs += _check_catalog_collection_dir(catalog_filepath, collection)
 
     gdf = None
+    windows: dict = {}
     try:
         gdf = _as_gdf(label_polygons)
         if id_col not in gdf.columns:
@@ -712,6 +800,17 @@ def create_training_data(
             errs.append("label_polygons is empty.")
         elif gdf.geometry.isna().any():
             errs.append("label_polygons has null geometries.")
+        if date_errs:
+            pass
+        elif not per_polygon:
+            clash = [c for c in _WINDOW_COLUMNS if c in gdf.columns]
+            if clash:
+                errs.append(f"label_polygons has columns {clash} and startdate/enddate were also "
+                            "given; pass startdate=None, enddate=None to use the columns, or "
+                            "rename them.")
+        elif id_col in gdf.columns:
+            windows, window_errs = _polygon_windows(gdf, id_col, mosaic_days, bands)
+            errs += window_errs
     except Exception as exc:  # unreadable polygons is a preflight failure, not a crash
         errs.append(f"could not read label_polygons: {exc}")
 
@@ -748,8 +847,8 @@ def create_training_data(
     # never short-circuit.
     if overwrite is False:
         want_features = adapter is not None or feature_sequence is not None or aggregate is not None
-        identity = _flatten_identity_from_request(
-            gdf, id_col=id_col, run_folderpath=run_folderpath,
+        identity = _flatten_identity_from_windows(
+            gdf, windows, id_col=id_col, run_folderpath=run_folderpath,
             startdate=startdate, enddate=enddate, mosaic_days=mosaic_days,
             bands=bands, collection=collection,
             mosaic_scheme=config.MOSAIC_SCHEME,
@@ -794,6 +893,20 @@ def create_training_data(
     else:
         shapefilepath = label_polygons
 
+    # One polygon file per distinct window; the segment names it, as it names the cubes.
+    window_units: list[_create_datacube.Window] = []
+    for (w_start, w_end), w_ids in windows.items():
+        segment = _create_datacube.window_folder_segment(
+            w_start, w_end, mosaic_days, bands=bands, mosaic_scheme=config.MOSAIC_SCHEME,
+            collection=collection, declaration=_collections.get(collection),
+            properties_filter=properties_filter, processing=processing,
+        )
+        fs.makedirs(os.path.join(run_folderpath, segment))
+        w_path = os.path.join(run_folderpath, segment, "polygons.geojson")
+        w_gdf = gdf[gdf[id_col].astype(str).isin(w_ids)]
+        fs.write_text(w_path, w_gdf.to_json(default=str))
+        window_units.append(_create_datacube.Window(w_start, w_end, w_path, frozenset(w_ids)))
+
     # Wave 2 -- catalog/download preflight. Unreachable when the short-circuit above
     # already fired, which is the point: a satisfied re-run needs `catalog_filepath` to
     # exist no more than it needs `setup` to run.
@@ -818,32 +931,49 @@ def create_training_data(
         # STAC-backed plan only fires on the empty case, so this costs nothing in the
         # normal path. Only meaningful when NOT auto-downloading.
         if catalog_present and len(gdf) and not gdf.geometry.isna().any():
-            try:
-                covered = TileCatalog(catalog_filepath).filter(gdf, startdate, enddate)
-            except Exception:  # noqa: BLE001 - a bad filter just means "skip the coverage hint"
-                covered = None
-            if covered is not None and len(covered) == 0:
-                catalog_errs.append(_imagery_missing_message(
-                    gdf, startdate, enddate, bands, catalog_filepath=catalog_filepath,
-                    why="no catalog tiles intersect the label polygons in-window",
-                ))
+            checks = (
+                [(w.startdate, w.enddate, gdf[gdf[id_col].astype(str).isin(w.ids)])
+                 for w in window_units] or [(startdate, enddate, gdf)]
+            )
+            uncovered = []
+            for w_start, w_end, w_gdf in checks:
+                try:
+                    covered = TileCatalog(catalog_filepath).filter(w_gdf, w_start, w_end)
+                except Exception:  # noqa: BLE001 - a bad filter just means "skip the coverage hint"
+                    covered = None
+                if covered is not None and len(covered) == 0:
+                    uncovered.append(_imagery_missing_message(
+                        w_gdf, w_start, w_end, bands, catalog_filepath=catalog_filepath,
+                        why="no catalog tiles intersect the label polygons in-window",
+                    ))
+            # A window with no imagery is recorded known-empty by the build leg; only a
+            # request with no imagery anywhere is a preflight failure.
+            if len(uncovered) == len(checks):
+                catalog_errs += uncovered
+            else:
+                for message in uncovered:
+                    print(f"[plan] {message}", flush=True)
     _raise_preflight(catalog_errs)
 
     if download:
         # The catalog lives at `{root}/{collection}/catalog.parquet`, so the archive root is
         # its GRANDPARENT (the parent-name check ran in wave 1).
         dst_folderpath = os.path.dirname(os.path.dirname(catalog_filepath.rstrip("/"))) or "."
-        _download_verb(
-            roi=shapefilepath, startdate=startdate, enddate=enddate, bands=bands,
-            dst_folderpath=dst_folderpath, creds=creds, source=source, collection=collection,
-            properties_filter=properties_filter,
-            # A specifier is forwarded; `None` (build default) fetches the download default,
-            # "latest" -- one processing per acquisition, so the build then sees no ambiguity
-            # it did not already have.
-            processing=processing if processing is not None else _processing.LATEST,
-            max_tiles=max_tiles, max_cloudcover=max_cloudcover, cog=cog,
-            storage=storage, runner=runner, runner_kwargs=runner_kwargs,
-        )
+        for w_roi, w_start, w_end in (
+            [(w.shapefilepath, w.startdate, w.enddate) for w in window_units]
+            or [(shapefilepath, startdate, enddate)]
+        ):
+            _download_verb(
+                roi=w_roi, startdate=w_start, enddate=w_end, bands=bands,
+                dst_folderpath=dst_folderpath, creds=creds, source=source,
+                collection=collection, properties_filter=properties_filter,
+                # A specifier is forwarded; `None` (build default) fetches the download
+                # default, "latest" -- one processing per acquisition, so the build then sees
+                # no ambiguity it did not already have.
+                processing=processing if processing is not None else _processing.LATEST,
+                max_tiles=max_tiles, max_cloudcover=max_cloudcover, cog=cog,
+                storage=storage, runner=runner, runner_kwargs=runner_kwargs,
+            )
 
     # `"datacubes"` forces the flatten leg too: a caller who asked for a cube rebuild must
     # never be handed arrays flattened from the cubes being replaced.
@@ -853,20 +983,30 @@ def create_training_data(
     print("[plan] will run: build -> flatten -> land", flush=True)
 
     csv_filepath = os.path.join(run_folderpath, "input.csv")
-    _create_datacube.run_create_datacube(
-        catalog_filepath=catalog_filepath, timestamp_col="timestamp",
-        shapefilepath=shapefilepath, id_col=id_col, run_folderpath=run_folderpath,
-        startdate=startdate, enddate=enddate, bands=bands,
-        mosaic_days=mosaic_days,
-        csv_filepath=csv_filepath, label_col=label_col, cores=cores,
-        # Setup is scoped to the shortfall unless the caller forces a cube rebuild, in
-        # which case setup re-reads the catalog too -- otherwise a rebuild would be fed by
-        # the stale per-shape `catalog.parquet` slice it was meant to replace. Ordinary
-        # re-runs and `overwrite="flatten"` both take the scoped path.
-        overwrite_setup_csv=build_overwrite,
-        overwrite=build_overwrite, runner=runner, runner_kwargs=runner_kwargs,
-        collection=collection, properties_filter=properties_filter, processing=processing,
-    )
+    # Setup is scoped to the shortfall unless the caller forces a cube rebuild, in which
+    # case setup re-reads the catalog too -- otherwise a rebuild would be fed by the stale
+    # per-shape `catalog.parquet` slice it was meant to replace. Ordinary re-runs and
+    # `overwrite="flatten"` both take the scoped path.
+    if window_units:
+        _create_datacube.run_create_datacube_windows(
+            window_units, catalog_filepath=catalog_filepath, timestamp_col="timestamp",
+            id_col=id_col, run_folderpath=run_folderpath, bands=bands, mosaic_days=mosaic_days,
+            csv_filepath=csv_filepath, label_col=label_col, cores=cores,
+            overwrite_setup_csv=build_overwrite, overwrite=build_overwrite, runner=runner,
+            runner_kwargs=runner_kwargs, collection=collection,
+            properties_filter=properties_filter, processing=processing,
+        )
+    else:
+        _create_datacube.run_create_datacube(
+            catalog_filepath=catalog_filepath, timestamp_col="timestamp",
+            shapefilepath=shapefilepath, id_col=id_col, run_folderpath=run_folderpath,
+            startdate=startdate, enddate=enddate, bands=bands,
+            mosaic_days=mosaic_days,
+            csv_filepath=csv_filepath, label_col=label_col, cores=cores,
+            overwrite_setup_csv=build_overwrite,
+            overwrite=build_overwrite, runner=runner, runner_kwargs=runner_kwargs,
+            collection=collection, properties_filter=properties_filter, processing=processing,
+        )
 
     # Flatten phase delegates to `flatten_training_data` -- no duplicated reduce/
     # land/features logic. Reuse the SAME run_id (aml) so the flatten reduce writes to a
@@ -1004,6 +1144,28 @@ def _flatten_identity_from_request(
     return json.loads(json.dumps(identity, default=str))
 
 
+def _flatten_identity_from_windows(gdf, windows: dict, *, startdate, enddate, **kw) -> dict:
+    """`_flatten_identity_from_request` for a per-polygon request: one identity per distinct
+    window (own segment, own known-empty record), joined. `windows` empty means the scalar
+    window."""
+    if not windows:
+        return _flatten_identity_from_request(gdf, startdate=startdate, enddate=enddate, **kw)
+    id_col = kw["id_col"]
+    parts = [
+        _flatten_identity_from_request(
+            gdf[gdf[id_col].astype(str).isin(w_ids)], startdate=w_start, enddate=w_end, **kw)
+        for (w_start, w_end), w_ids in windows.items()
+    ]
+    # A window whose polygons are all known-empty has no row in `input.csv`, so it adds
+    # nothing to the identity computed from there.
+    parts = [part for part in parts if part["cubes"]] or parts[:1]
+    identity = parts[0]
+    identity["cubes"] = sorted(c for part in parts for c in part["cubes"])
+    for key in _WINDOW_COLUMNS:
+        identity["params"][key] = sorted({v for part in parts for v in part["params"][key]})
+    return identity
+
+
 def _fingerprint_aggregate(aggregate):
     if aggregate is None:
         return None
@@ -1032,7 +1194,7 @@ def _fingerprint_features(adapter, feature_sequence) -> dict | None:
 
 
 def _flatten_output_names(*, label_col, want_features: bool) -> list[str]:
-    names = ["data.npy", "coords.npy", "ids.npy", TRAINING_METADATA_NAME]
+    names = ["data.npy", "coords.npy", "ids.npy", "window_starts.npy", TRAINING_METADATA_NAME]
     if label_col is not None:
         names.append("labels.npy")
     if want_features:

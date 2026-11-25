@@ -88,3 +88,25 @@ def test_flatten_raises_on_inconsistent_bands(tmp_path):
     df = pd.DataFrame({"fp": [fp_a, fp_b], "id": ["A", "B"]})
     with pytest.raises(ValueError, match="bands are not consistent"):
         flatten.flatten(df, "fp", "id", str(tmp_path / "flat"))
+
+
+def test_flatten_accepts_different_dates_with_the_same_t_and_writes_window_starts(tmp_path):
+    ts_a = [pd.Timestamp("2018-01-01", tz="UTC"), pd.Timestamp("2018-02-01", tz="UTC")]
+    ts_b = [pd.Timestamp("2019-03-01", tz="UTC"), pd.Timestamp("2019-04-01", tz="UTC")]
+    fp_a = _save_cube(tmp_path / "A", np.ones((2, 2, 2, 2), dtype=np.uint16), timestamps=ts_a)
+    fp_b = _save_cube(tmp_path / "B", np.ones((2, 2, 2, 2), dtype=np.uint16), timestamps=ts_b)
+    df = pd.DataFrame({"fp": [fp_a, fp_b], "id": ["A", "B"]})
+    flatten.flatten(df, "fp", "id", str(tmp_path / "flat"))
+    starts = fs.load_npy(str(tmp_path / "flat" / "window_starts.npy"))
+    ids = fs.load_npy(str(tmp_path / "flat" / "ids.npy"))
+    assert starts.dtype == np.dtype("datetime64[ns]") and len(starts) == len(ids) == 8
+    assert (starts[ids == "A"] == np.datetime64("2018-01-01", "ns")).all()
+    assert (starts[ids == "B"] == np.datetime64("2019-03-01", "ns")).all()
+
+
+def test_flatten_refuses_a_different_number_of_timestamps(tmp_path):
+    fp_a = _save_cube(tmp_path / "A", np.ones((2, 2, 2, 2), dtype=np.uint16))
+    fp_b = _save_cube(tmp_path / "B", np.ones((1, 2, 2, 2), dtype=np.uint16), timestamps=TS[:1])
+    df = pd.DataFrame({"fp": [fp_a, fp_b], "id": ["A", "B"]})
+    with pytest.raises(ValueError, match="timestamps are not consistent"):
+        flatten.flatten(df, "fp", "id", str(tmp_path / "flat"))

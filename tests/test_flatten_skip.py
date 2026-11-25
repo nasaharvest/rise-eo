@@ -24,6 +24,8 @@ def _write_flatten_outputs(export_folderpath, *, n_px=3):
     fs.makedirs(export_folderpath)
     fs.save_npy(os.path.join(export_folderpath, "data.npy"), np.zeros((n_px, T, len(BANDS))))
     fs.save_npy(os.path.join(export_folderpath, "ids.npy"), np.arange(n_px))
+    fs.save_npy(os.path.join(export_folderpath, "window_starts.npy"),
+                np.full(n_px, np.datetime64("2018-01-01"), dtype="datetime64[ns]"))
     fs.save_npy(os.path.join(export_folderpath, "coords.npy"), np.zeros((n_px, 2)))
     fs.save_npy(
         os.path.join(export_folderpath, "metadata.pickle.npy"),

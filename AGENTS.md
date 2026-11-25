@@ -81,8 +81,9 @@ A PR merges when it passes four gates (details in `CONTRIBUTING.md`):
   `{band_name: index}`.
 - **The catalog is GeoParquet** (`TileCatalog`); STAC is an extra export. A datacube is `datacube.npy` +
   `metadata.pickle.npy`. Nodata is 0.
-- **Calendar-interval mosaics are the only kind.** `mosaic_days` is an `int` or `"month"`. Cubes with the
-  same start, end and `mosaic_days` share the same `timestamps` axis; `flatten` needs that.
+- **Calendar-interval mosaics are the only kind.** `mosaic_days` is an `int` or `"month"`. `flatten` needs every
+  cube to have the same number of timestamps (the same T) and the same bands. Their dates may differ (per-polygon
+  windows), and `window_starts.npy` records each sample's window start.
 - **No compatibility shims for old archive layouts.** Old artifacts raise an error that says how to fix
   them. On-disk format versions keep their lists of supported versions.
 - **A test that reads a Markdown file lives in `tests/test_docs.py` or `tests/test_notebooks.py`.** A

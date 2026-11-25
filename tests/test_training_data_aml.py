@@ -229,6 +229,7 @@ def test_create_training_data_download_orchestrates_download_build_flatten_in_or
         fs.makedirs(export_folderpath)
         fs.save_npy(f"{export_folderpath}/data.npy", np.zeros((n_px, T, len(bands))))
         fs.save_npy(f"{export_folderpath}/ids.npy", np.zeros(n_px))
+        fs.save_npy(f"{export_folderpath}/window_starts.npy", np.zeros(1, dtype="datetime64[ns]"))
         fs.save_npy(f"{export_folderpath}/coords.npy", np.zeros((n_px, 2)))
         fs.save_npy(f"{export_folderpath}/labels.npy", np.array(["a"] * n_px))
         fs.save_npy(
@@ -278,6 +279,7 @@ def test_create_training_data_download_stages_gdf_once_for_download_and_build(
         fs.makedirs(export_folderpath)
         fs.save_npy(f"{export_folderpath}/data.npy", np.zeros((1, 1, 1)))
         fs.save_npy(f"{export_folderpath}/ids.npy", np.zeros(1))
+        fs.save_npy(f"{export_folderpath}/window_starts.npy", np.zeros(1, dtype="datetime64[ns]"))
         fs.save_npy(f"{export_folderpath}/coords.npy", np.zeros((1, 2)))
         fs.save_npy(
             f"{export_folderpath}/metadata.pickle.npy",
@@ -325,6 +327,7 @@ def test_create_training_data_stages_gdf_with_timestamp_column(tmp_path, monkeyp
         fs.makedirs(export_folderpath)
         fs.save_npy(f"{export_folderpath}/data.npy", np.zeros((1, 1, 1)))
         fs.save_npy(f"{export_folderpath}/ids.npy", np.zeros(1))
+        fs.save_npy(f"{export_folderpath}/window_starts.npy", np.zeros(1, dtype="datetime64[ns]"))
         fs.save_npy(f"{export_folderpath}/coords.npy", np.zeros((1, 2)))
         fs.save_npy(
             f"{export_folderpath}/metadata.pickle.npy",
@@ -379,6 +382,7 @@ def test_create_training_data_aml_features_written_locally_after_land_local(
         fs.save_npy(f"{export_folderpath}/data.npy", np.ones((n_px, T, len(bands))))
         fs.save_npy(f"{export_folderpath}/coords.npy", np.zeros((n_px, 2)))
         fs.save_npy(f"{export_folderpath}/ids.npy", np.array(["a"] * n_px))
+        fs.save_npy(f"{export_folderpath}/window_starts.npy", np.zeros(1, dtype="datetime64[ns]"))
         fs.save_npy(
             f"{export_folderpath}/metadata.pickle.npy",
             {"timestamps": list(range(T)), "bands": bands}, allow_pickle=True,
@@ -434,6 +438,7 @@ def test_create_training_data_accepts_any_t_no_adapter_n_timestamps_preflight(
         fs.makedirs(export_folderpath)
         fs.save_npy(f"{export_folderpath}/data.npy", np.zeros((1, 19, 1)))
         fs.save_npy(f"{export_folderpath}/ids.npy", np.zeros(1))
+        fs.save_npy(f"{export_folderpath}/window_starts.npy", np.zeros(1, dtype="datetime64[ns]"))
         fs.save_npy(f"{export_folderpath}/coords.npy", np.zeros((1, 2)))
         fs.save_npy(
             f"{export_folderpath}/metadata.pickle.npy",
