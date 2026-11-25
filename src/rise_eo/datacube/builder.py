@@ -27,6 +27,7 @@ import geopandas as gpd
 import numpy as np
 import shapely
 from rasterio.crs import CRS
+from rasterio.features import geometry_mask
 
 from rise_eo import config
 from rise_eo.catalog import declaration as declaration_module
@@ -299,6 +300,7 @@ def build_datacube(
     max_timedelta_days: int = config.MAX_TIMEDELTA_DAYS,
     write_timings: bool = False,
     write_read_log: bool = False,
+    reference_profile: dict | None = None,
 ) -> None:
     """Assemble one cloud-masked, time-mosaicked datacube and save it.
 
@@ -320,6 +322,13 @@ def build_datacube(
 
     `reference_band`, if given, overrides the declaration's, and must be among `bands`,
     or this raises.
+
+    `reference_profile`, if given, is another cube's grid (its `geotiff_metadata`): it replaces
+    the profile built from this cube's own reference band, and its CRS is the build's `dst_crs`.
+    Such a cube is read with the shape buffered by two reference pixels, so every edge pixel of
+    the grid has a source pixel to resample from, and every pixel outside the shape (rasterized
+    on the grid, `all_touched=True`) is set to nodata, so its footprint equals the reference
+    cube's. Inside the shape each band keeps its own per-timestamp nodata.
 
     `declared.mosaic_partition` is enforced before anything else runs
     (`_enforce_mosaic_partition`): rows spanning more than one value of a partitioned
@@ -416,9 +425,13 @@ def build_datacube(
     # Load + crop each (granule, band) to the shape; adds crs/image_index, drops
     # unreadable rows. Raster pixel reads use rasterio directly -- the documented seam
     # exception. This is the read phase the benchmarks scrutinise.
+    on_given_grid = reference_profile is not None
+    load_shape_gdf = shape_gdf
+    if on_given_grid:
+        load_shape_gdf = _buffered_shape(shape_gdf, reference_profile, pixels=2)
     with _instrument.timed(timings, "load_images"):
         catalog_gdf, data_profile_list, reads = _load_images(
-            catalog_gdf=catalog_subset, shape_gdf=shape_gdf, nodata=nodata,
+            catalog_gdf=catalog_subset, shape_gdf=load_shape_gdf, nodata=nodata,
             njobs=njobs_load_images, write_read_log=write_read_log,
         )
         # ⚠️ Harmonize each image's declared radiometric offset HERE -- before
@@ -433,7 +446,7 @@ def build_datacube(
 
     # Collapse into a single UTM zone so rasterio.merge (single-CRS) can run.
     with _instrument.timed(timings, "dst_crs"):
-        dst_crs = _get_dst_crs(catalog_gdf)
+        dst_crs = reference_profile["crs"] if on_given_grid else _get_dst_crs(catalog_gdf)
 
     # Reference grid = the merged reference-band (B08, 10 m) profile. Everything is
     # resampled TO this real known-10 m image, not to an abstract target grid.
@@ -446,12 +459,14 @@ def build_datacube(
     # `_get_indices_to_resample` naturally finds nothing to resample against whichever
     # band is picked here -- no separate "skip resample" branch is needed.
     with _instrument.timed(timings, "reference_profile"):
-        reference_grid_band = reference_band if reference_band is not None else bands[0]
-        ref_indices = catalog_gdf.loc[catalog_gdf["band"] == reference_grid_band, "image_index"]
-        reference_profile = _get_merged_profile(
-            indices=ref_indices, data_profile_list=data_profile_list, dst_crs=dst_crs,
-            nodata=nodata, njobs=njobs,
-        )
+        if not on_given_grid:
+            reference_grid_band = reference_band if reference_band is not None else bands[0]
+            ref_indices = catalog_gdf.loc[
+                catalog_gdf["band"] == reference_grid_band, "image_index"]
+            reference_profile = _get_merged_profile(
+                indices=ref_indices, data_profile_list=data_profile_list, dst_crs=dst_crs,
+                nodata=nodata, njobs=njobs,
+            )
 
     with _instrument.timed(timings, "resample"):
         resample_indices = _get_indices_to_resample(
@@ -468,6 +483,11 @@ def build_datacube(
             catalog_gdf=catalog_gdf, data_profile_list=data_profile_list, bands=bands,
             reference_profile=reference_profile, shape_gdf=shape_gdf, nodata=nodata,
         )
+        if on_given_grid:
+            _blank_outside_shape(datacube, shape_gdf, reference_profile, nodata)
+            metadata["geotiff_metadata"] = {
+                **reference_profile, "dtype": datacube.dtype.name, "nodata": nodata}
+        metadata["nodata"] = nodata
 
     with _instrument.timed(timings, "ops"):
         # Declaration-driven op-sequence assembly — replaces the
@@ -705,13 +725,32 @@ def _get_merged_profile(indices, data_profile_list, dst_crs, nodata=None, njobs=
     return merged_profile
 
 
+def _buffered_shape(shape_gdf, reference_profile, *, pixels: int):
+    """`shape_gdf` in the reference CRS, buffered by `pixels` reference pixels."""
+    buffered = shape_gdf.to_crs(reference_profile["crs"])
+    buffered["geometry"] = buffered.geometry.buffer(pixels * abs(reference_profile["transform"].a))
+    return buffered
+
+
+def _blank_outside_shape(datacube, shape_gdf, reference_profile, nodata) -> None:
+    """Set every pixel outside the shape, rasterized on the reference grid with
+    `all_touched=True`, to `nodata`, in place."""
+    outside = geometry_mask(
+        shape_gdf.to_crs(reference_profile["crs"]).geometry,
+        out_shape=(reference_profile["height"], reference_profile["width"]),
+        transform=reference_profile["transform"], all_touched=True,
+    )
+    datacube[:, outside] = nodata
+
+
 def _get_indices_to_resample(indices, data_profile_list, reference_profile) -> list:
     out = []
     for i in indices:
         _, p = data_profile_list[i]
         if (p["crs"] != reference_profile["crs"]
                 or p["height"] != reference_profile["height"]
-                or p["width"] != reference_profile["width"]):
+                or p["width"] != reference_profile["width"]
+                or p["transform"] != reference_profile["transform"]):
             out.append(i)
     return out
 

@@ -122,6 +122,10 @@ declare the same name. A provider name that clashes with an existing collection 
 `B8A` against Sentinel-2) is mapped to a new rise-eo name in that collection's spec, never
 renamed per call.
 
+A collection joins a fused cube (it is not the first input) with no extra declaration: the builder resamples
+it onto the first input's grid with its own declared nodata, and `join_cubes` turns that nodata into 0. The
+first input needs a `reference_band`.
+
 ## Pointing a run at another collection is not a rename
 
 The verbs take `collection=`, but changing it and `bands=` is not enough. Read the declaration

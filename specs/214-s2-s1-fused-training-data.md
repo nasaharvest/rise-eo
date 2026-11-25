@@ -24,6 +24,20 @@ decision changes direction. One decision is new: D10, from the maintainer's #147
 - D8: states how paths are recorded;
 - the ACs now match the phases, and the S2 band count is worded consistently.
 
+**Amendment A2 (2026-11-25, from checking D5/D6 against the code before P5): SIGNED OFF (user,
+2026-11-25).** The three answers below are the maintainer's (2026-11-25). No signed-off
+decision changes direction. A2:
+- D5 step 2: a component built onto the reference grid is read with the shape buffered by two
+  reference pixels, then blanked outside the shape as rasterized on the reference grid, so its
+  footprint equals the reference cube's;
+- D5 step 7 (new): a unit where any input has no imagery in the whole window is skipped and
+  recorded known-empty, naming that collection;
+- D5 step 5: `grid_from` is the reference component's full path segment, window included;
+- D4: `create_training_data(download=True, inputs=...)` downloads every input, with every
+  input's preflight before the first download;
+- AC7 counts valid S1 pixels equal to 0.0 in the S1 component cube, whose nodata is −32768;
+- Out of scope: `verify_adapter(inputs=...)`, filed as #231.
+
 ## Problem
 
 A model whose adapter we need to write takes, per pixel:
@@ -159,6 +173,8 @@ CollectionInput(
   refuse a clash rather than rename it (`merge_cubes` needs an `overlap_resolver`; `xarray.merge`
   raises `MergeError`). Earth Engine's automatic `B04_1` renaming was rejected, because the new name
   no longer says which satellite the band came from.
+- (A2) `create_training_data(download=True, inputs=[...])` downloads every input as
+  `download(inputs=...)` does: every input's preflight runs before the first download.
 - (A1) With one input, `create_training_data` and `run_inference` build and infer exactly as with
   the scalar arguments. `download(inputs=...)` always returns the dict, even with one input.
 
@@ -173,6 +189,13 @@ When `inputs` has more than one entry, each per-polygon or per-cell task builds 
    `reference_profile=`, which replaces the profile it would compute from its own reference band. The
    S1 cube is resampled onto S2's B08 grid with the builder's existing resampler (nearest neighbour).
    The S1 cube keeps its own declaration, nodata and (absent) mask.
+   (A2) Such a component is read with the shape buffered by two reference pixels, so every edge
+   pixel of the reference grid has a source pixel to resample from. After the resample, every
+   pixel outside the shape, as rasterized on the reference grid with `all_touched=True` (the rule
+   the reference cube's own crop uses), is set to the component's nodata. The component's
+   footprint then equals the reference cube's. Inside the shape each band keeps its own nodata at
+   each timestamp: a day one satellite saw and the other did not stays valid in one and nodata in
+   the other, and `flatten` keeps the pixel.
 3. **Fix the resample test.** `_get_indices_to_resample` also compares the **transform**, so an image
    with the reference's shape but a shifted origin is resampled, not stacked out of place.
 4. **Join** (`datacube.join_cubes`): (A1) assert identical `timestamps` labels, CRS, transform,
@@ -184,13 +207,19 @@ When `inputs` has more than one entry, each per-polygon or per-cell task builds 
 5. **Paths** follow D7. Component cubes keep their own paths, so a rerun resumes them. A component
    built onto another collection's grid gets `-on-<code>` in its path, and (A1) **`grid_from`**, the
    reference cube's full `params_key`, in its hash. It never collides with a standalone cube, and it
-   moves whenever the reference cube's parameters change. The fused cube's metadata and
+   moves whenever the reference cube's parameters change. (A2) In the code, `params_key` leaves
+   out the window, so `grid_from` is the reference component's full path segment, window included. The fused cube's metadata and
    `params.json` list each component's collection, path and provenance. (A1) The fused cube's metadata
    and `lineage.json` (D8) also carry **`band_collections`**, a `{band: collection}` map in band order.
 6. (A1) Only calendar windows remain (D10), and they give two collections the same `timestamps`
    axis. All inputs share one window and
    one `mosaic_days`, so preflight knows their common window starts before any download. The join's
    timestamp check (step 4) is a backstop, not the first place a mismatch is found.
+7. (A2) **A unit where any input has no imagery in the whole window is skipped** and recorded
+   known-empty, as a single-collection unit with no imagery is today. The skip line names the
+   collection that had none. A fused cube never holds a collection that is missing for the whole
+   window. A window with some imagery keeps D1's rule: a month with no granules is an
+   all-nodata slice.
 
 `flatten` and `feature_sequence` work on the fused cube unchanged: it is an ordinary
 `datacube.npy` + `metadata.pickle.npy`. With D1 and calendar windows on both inputs, the two
@@ -425,7 +454,10 @@ Tests (synthetic, in `tests/`):
   metadata. (A1) Mismatched timestamps, CRS or transform raise. The fused cube's path reads
   `s2l2a-s1rtc_20180101-20190101_P1M_<hash8>/<id>/`. Changing the S2 input's bands moves the S1
   component's path (`grid_from`). (A1) Its metadata's `band_collections` maps each band, in band
-  order, to its collection.
+  order, to its collection. (A2) A component on a grid offset by half a pixel from the reference has
+  valid values at every edge pixel of the reference cube's footprint and nodata outside it. A
+  unit with no S1 rows is skipped and recorded known-empty, and the skip line names
+  `sentinel-1-rtc`.
 - **AC6:** for one cell geometry, the training path and the inference path produce byte-identical
   fused cubes.
 
@@ -460,7 +492,8 @@ downloads and builds run as AML jobs (`runner="aml"`). Only the flattened arrays
   both orbit states. Then `create_training_data(inputs=[s2, s1], runner="aml")` over the
   `AT_2018_TRAIN` fields inside that cell. Asserts: one fused cube's shape is `(1, H, W, 14)` (12 S2
   bands, since SCL is dropped after masking, plus `vv` and `vh`), its dtype is `float32` and its
-  nodata is 0, and the count of valid S1 pixels equal to 0.0 is printed. The run-book writes that
+  nodata is 0, and the count of valid S1 pixels equal to 0.0 is printed. (A2) It is counted in the
+  S1 component cube, whose nodata is −32768: in the fused cube 0 is nodata. The run-book writes that
   cube's `B08` and `vv` as GeoTIFFs, and in QGIS the user checks that field edges in `vv` line up
   with the edges in `B08`.
 - **AC8:** the same run-book, full year: 2018-01-01 → 2019-01-01, T = 12, on the same fields. This
@@ -480,6 +513,8 @@ downloads and builds run as AML jobs (`runner="aml"`). Only the flattened arrays
 - Fusion with HLS, speckle filtering, dB conversion (a `feature_sequence` step can do that),
   `sat:relative_orbit` selection, and S1 from CDSE.
 - Other calendar periods (week, dekad, season).
+- (A2) `verify_adapter(inputs=...)`, so a fused model can be checked on one cell before a fan-out
+  (#231).
 
 ## Phases
 

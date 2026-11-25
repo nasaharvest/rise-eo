@@ -77,7 +77,7 @@ where they are; the location is an argument, optionally defaulted from user conf
 | `rise_eo/api.py` | **the public verbs** — `download`, `create_training_data`, `flatten_training_data`, `run_inference`, `verify_adapter`, `deploy`. Preflight lives here: fail cheap, before any spend. |
 | `rise_eo/sources/` | `cdse.py`, `mpc.py` — discover + fetch granules. `_s2_radiometry.py` derives offset/scale from the processing baseline. `download_cli.py` is the safe shell runner. |
 | `rise_eo/catalog/` | `catalog.py` = `TileCatalog`, the GeoParquet query format. `stac.py` = an **additive export view**; `stac_geoparquet.py` exports it in the form pgSTAC loads. `declaration.py` carries radiometry through. `inspect_cli.py` / `restamp_cli.py` are operator tools. |
-| `rise_eo/datacube/` | `builder.py` merges granules into one cube per geometry; `_instrument.py` the opt-in timing sidecars; `ops.py` array transforms; `flatten.py` the reduce into training arrays. |
+| `rise_eo/datacube/` | `builder.py` merges granules into one cube per geometry; `_instrument.py` the opt-in timing sidecars; `ops.py` array transforms; `join.py` joins cubes of several collections along the band axis; `flatten.py` the reduce into training arrays. |
 | `rise_eo/bands/` | band math on the 5-D contract. |
 | `rise_eo/raster/` | rasterio primitives: `cog.py` (COG conversion, remote-dst branch), `images.py`. **The home of the GDAL/VSI exception to invariant 1** — the mosaic path in `api.py` and the COG writer in `model/engine.py` also open rasters directly, and are the only other places that may. |
 | `rise_eo/grid.py` | `roi_to_s2_grids` — an ROI becomes S2 grid cells, one cell = one work unit. |
@@ -157,8 +157,18 @@ and the segment's `params.json` writes them out.
 `download(inputs=[CollectionInput(...), ...])` runs one download per collection, in order, after every
 input's preflight has passed, and returns `{collection: catalog_filepath}`. Each built-in collection module
 declares its rise-eo band names as `BANDS`, and no two collections share one, so a band name identifies its
-collection. `create_training_data` and `run_inference` take the same `inputs=` with `archive_root=`; they
-accept one input today.
+collection. `create_training_data` and `run_inference` take the same `inputs=` with `archive_root=`.
+
+With more than one input, `create_datacube.setup` runs once per component under its own segment (the first
+standalone, the others `<code>-on-<refcode>_...` with the reference component's full segment in their hash),
+then writes one `input.csv` row per shape that every component has imagery for, plus a `fusion.json` listing the
+components' control files. The row rides the same runners as any other: `workflows.task` with
+`--fusion-filepath` (the local Snakefile, the AML shard and `infer_task` all pass it) builds the first
+component, builds each other one with `reference_profile=` read from the first's cube metadata (so a resumed unit
+reuses finished components), and joins them (`datacube/join.py`) into the fused folder. The fused
+`datacube.npy` is the resume signal. A component built onto a given grid is read with the shape buffered by two
+reference pixels and set to nodata outside the shape rasterized on that grid (`all_touched=True`). The flatten
+skip identity and the known-empty manifest key on the fused segment, so a change to either input moves them.
 
 **Code that looks simplifiable but is not:**
 

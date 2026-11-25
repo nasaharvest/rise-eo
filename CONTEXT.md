@@ -54,6 +54,13 @@ One collection's `collection`, `bands` and per-collection options (`properties_f
 `max_cloudcover`), passed in a list as `inputs=` to `download`, `create_training_data` and `run_inference`.
 `inputs=` replaces the scalar arguments of the same names. A collection and a band name each appear once.
 
+**Fused cube**:
+The datacube of a call with several `inputs=`: the first input's cube is the **reference grid**, every other
+input's cube is built onto it, and `datacube.join_cubes` concatenates them along the band axis in `inputs`
+order (`float32`, nodata 0; metadata `band_collections` maps each band to its collection). Each component keeps
+its own folder (`s1rtc-on-s2l2a_...`), and the fused cube lives under `s2l2a-s1rtc_...`. A `fusion.json` in the
+fused unit's folder lists the components; the `input.csv` row names it in `fusion_filepath`.
+
 **Archive root** (`archive_root=`):
 The folder `download` wrote (its `dst_folderpath`). With `inputs=`, the verbs that read a catalog take it in
 place of `catalog_filepath`: each catalog is `{archive_root}/{collection}/catalog.parquet`.

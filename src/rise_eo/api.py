@@ -565,8 +565,10 @@ def _build_inputs_args(inputs, archive_root, passed: Mapping[str, object]) -> di
     if archive_root is None:
         errs.append("inputs= needs archive_root= (the root `download` wrote) in place of "
                     "catalog_filepath.")
-    if not errs and len(inputs) > 1:
-        errs.append("fusing several collections is not supported yet: pass one input.")
+    if not errs and len(inputs) > 1 and _collections.get(inputs[0].collection).reference_band is None:
+        errs.append(f"the first input's collection {inputs[0].collection!r} declares no "
+                    "reference_band, so it cannot set the grid the other inputs are built onto; "
+                    "put a collection with a reference band (sentinel-2-l2a) first.")
     _raise_preflight(errs)
     one = inputs[0]
     return dict(
@@ -574,7 +576,50 @@ def _build_inputs_args(inputs, archive_root, passed: Mapping[str, object]) -> di
         properties_filter=one.properties_filter, processing=one.processing,
         max_cloudcover=one.max_cloudcover,
         catalog_filepath=archive_catalog_filepath(archive_root, one.collection),
+        components=_fused_components(inputs, archive_root) if len(inputs) > 1 else None,
     )
+
+
+def _fused_components(inputs, archive_root) -> list[_create_datacube.Component]:
+    """One `Component` per input, in order, with native band names."""
+    return [
+        _create_datacube.Component(
+            i.collection, tuple(_native_bands(i.collection, i.bands)),
+            archive_catalog_filepath(archive_root, i.collection),
+            properties_filter=i.properties_filter, processing=i.processing,
+        ) for i in inputs
+    ]
+
+
+def _processing_input_errors(processing, collection, components) -> list[str]:
+    """`processing=` errors for the scalar request, or for every component of a fused one."""
+    if not components:
+        return _processing.processing_errors(processing, collection=collection, allow_none=True)
+    return [e for c in components for e in _processing.processing_errors(
+        c.processing, collection=c.collection, allow_none=True)]
+
+
+def _fused_band_list(components) -> list[str]:
+    """The fused cube's bands, in order: each component's bands minus the mask band its
+    declaration drops after masking."""
+    bands: list[str] = []
+    for c in components:
+        declaration = _collections.get(c.collection)
+        mask = declaration.mask_spec
+        dropped = mask.band if mask is not None and not declaration.mask_keep else None
+        bands += [b for b in c.bands if b != dropped]
+    return bands
+
+
+def _missing_fused_bands(required, components) -> list[str]:
+    """The `required` band names no component supplies, each mapped through the components'
+    own declarations (so a canonical alias like `nir08` finds its native band)."""
+    fused = set(_fused_band_list(components))
+    return [
+        r for r in required
+        if not ({r} | {_collections.get(c.collection).canonical_to_native(r) for c in components})
+        & fused
+    ]
 
 
 def _check_no_archive_root(archive_root) -> None:
@@ -901,10 +946,19 @@ def create_training_data(
     `properties_filter`, `processing`, `max_cloudcover` and `catalog_filepath` (pass `None`):
     passing both raises. Give `archive_root=`, the root `download` wrote; the catalog is
     `{archive_root}/{collection}/catalog.parquet`. One input builds exactly as the scalar
-    arguments do; more than one raises until fusing several collections is supported.
+    arguments do. More than one builds a **fused** cube per polygon: the first input's cube is
+    built as usual, every other input is built onto its grid (the first collection must declare a
+    `reference_band`), and the cubes are joined along the band axis in `inputs` order into one
+    `float32` cube whose nodata is 0 (`datacube.join_cubes`); its `band_collections` metadata maps
+    each band to its collection. A polygon any input has no imagery for in its window is skipped
+    and recorded known-empty, naming that collection. `adapter.required_bands` are checked
+    against the fused band list (each input's bands minus a mask band it drops after masking).
+    With `download=True` every input is downloaded, all preflights first.
 
     Spec: 49, 58, 59, 214.
     """
+    fused = None
+    all_inputs = inputs
     if inputs is None:
         _check_no_archive_root(archive_root)
         if catalog_filepath is None:
@@ -918,6 +972,7 @@ def create_training_data(
         collection, bands, properties_filter, processing, max_cloudcover, catalog_filepath = (
             resolved[k] for k in ("collection", "bands", "properties_filter", "processing",
                                   "max_cloudcover", "catalog_filepath"))
+        fused = resolved["components"]
     _check_one_feature_transform(adapter, feature_sequence)
     if overwrite not in _VALID_OVERWRITE:
         raise PreflightError(
@@ -929,6 +984,8 @@ def create_training_data(
     # see one spelling, or `bands=["B8A"]` and `bands=["nir08"]` would behave differently
     # despite naming the identical band.
     bands = _native_bands(collection, bands)
+    if fused:
+        bands = _fused_band_list(fused)
 
     per_polygon = startdate is None and enddate is None
     if (startdate is None) != (enddate is None):
@@ -942,8 +999,11 @@ def create_training_data(
     if not date_errs and not per_polygon:
         errs += _check_window(startdate, enddate, mosaic_days, bands)
     if adapter is not None:
-        req = _native_bands(collection, getattr(adapter, "required_bands", []) or [])
-        missing = [b for b in req if b not in bands]
+        required = list(getattr(adapter, "required_bands", []) or [])
+        if fused:
+            missing = _missing_fused_bands(required, fused)
+        else:
+            missing = [b for b in _native_bands(collection, required) if b not in bands]
         if missing:
             errs.append(f"adapter.required_bands not in requested bands: {missing}")
         # Deliberately no `n_timestamps` preflight: T is the caller's to choose via
@@ -951,8 +1011,11 @@ def create_training_data(
         # The cross-cube invariant is still enforced -- flatten raises if two cubes
         # disagree on the timestamps axis.
     errs += _aggregate_errors(aggregate)
-    errs += _processing.processing_errors(processing, collection=collection, allow_none=True)
-    errs += _check_catalog_collection_dir(catalog_filepath, collection)
+    errs += _processing_input_errors(processing, collection, fused)
+    for c in fused or [None]:
+        errs += _check_catalog_collection_dir(
+            catalog_filepath if c is None else c.catalog_filepath,
+            collection if c is None else c.collection)
 
     gdf = None
     windows: dict = {}
@@ -1019,7 +1082,7 @@ def create_training_data(
             bands=bands, collection=collection,
             mosaic_scheme=config.MOSAIC_SCHEME,
             adapter=adapter, feature_sequence=feature_sequence, aggregate=aggregate,
-            properties_filter=properties_filter, processing=processing,
+            properties_filter=properties_filter, processing=processing, components=fused,
         )
         stamp_filepath = os.path.join(export_folderpath, _FLATTEN_STAMP_NAME)
         if _stamp.matches_stamp(stamp_filepath, identity) and _flatten_outputs_present(
@@ -1062,10 +1125,10 @@ def create_training_data(
     # One polygon file per distinct window; the segment names it, as it names the cubes.
     window_units: list[_create_datacube.Window] = []
     for (w_start, w_end), w_ids in windows.items():
-        segment = _create_datacube.window_folder_segment(
+        segment = _create_datacube.request_segment(
             w_start, w_end, mosaic_days, bands=bands, mosaic_scheme=config.MOSAIC_SCHEME,
-            collection=collection, declaration=_collections.get(collection),
-            properties_filter=properties_filter, processing=processing,
+            collection=collection, properties_filter=properties_filter, processing=processing,
+            components=fused,
         )
         fs.makedirs(os.path.join(run_folderpath, segment))
         w_path = os.path.join(run_folderpath, segment, "polygons.geojson")
@@ -1078,20 +1141,28 @@ def create_training_data(
     # exist no more than it needs `setup` to run.
     catalog_errs: list[str] = []
     if download:
-        catalog_errs += _check_download_source(
-            source, collection, max_tiles,
-            runner=runner, creds=creds, max_tiles_required=True,
-        )
-        if max_cloudcover is not None and not catalog_errs:
-            catalog_errs += _check_cloudcover_capability(collection, max_cloudcover)
-    else:
-        catalog_present = fs.exists(catalog_filepath)
-        if not catalog_present:
-            catalog_errs.append(
-                f"catalog_filepath does not exist: {catalog_filepath} "
-                "— run rise_eo.download first, or pass download=True (compute never fetches "
-                "from a provider implicitly; spec 23 D13)."
+        for i in all_inputs or [None]:
+            input_collection = collection if i is None else i.collection
+            input_cloudcover = max_cloudcover if i is None else i.max_cloudcover
+            input_errs = _check_download_source(
+                source, input_collection, max_tiles,
+                runner=runner, creds=creds, max_tiles_required=True,
             )
+            if input_cloudcover is not None and not (catalog_errs or input_errs):
+                input_errs += _check_cloudcover_capability(input_collection, input_cloudcover)
+            catalog_errs += input_errs
+    else:
+        catalogs = [(c.collection, c.catalog_filepath) for c in fused] if fused \
+            else [(collection, catalog_filepath)]
+        catalog_present = True
+        for _, path in catalogs:
+            if not fs.exists(path):
+                catalog_present = False
+                catalog_errs.append(
+                    f"catalog_filepath does not exist: {path} "
+                    "— run rise_eo.download first, or pass download=True (compute never fetches "
+                    "from a provider implicitly; spec 23 D13)."
+                )
         # Catalog exists but covers NONE of the fields in-window -> hand back an actionable
         # download plan rather than an empty build. The offline `.filter` is cheap and the
         # STAC-backed plan only fires on the empty case, so this costs nothing in the
@@ -1101,17 +1172,24 @@ def create_training_data(
                 [(w.startdate, w.enddate, gdf[gdf[id_col].astype(str).isin(w.ids)])
                  for w in window_units] or [(startdate, enddate, gdf)]
             )
+            # A fused request is satisfied by no imagery only when EVERY input has none.
             uncovered = []
             for w_start, w_end, w_gdf in checks:
-                try:
-                    covered = TileCatalog(catalog_filepath).filter(w_gdf, w_start, w_end)
-                except Exception:  # noqa: BLE001 - a bad filter just means "skip the coverage hint"
-                    covered = None
-                if covered is not None and len(covered) == 0:
-                    uncovered.append(_imagery_missing_message(
-                        w_gdf, w_start, w_end, bands, catalog_filepath=catalog_filepath,
-                        why="no catalog tiles intersect the label polygons in-window",
-                    ))
+                gaps = []
+                for input_collection, path in catalogs:
+                    try:
+                        covered = TileCatalog(path).filter(w_gdf, w_start, w_end)
+                    except Exception:  # noqa: BLE001 - a bad filter just means "skip the coverage hint"
+                        covered = None
+                    if covered is not None and len(covered) == 0:
+                        gaps.append(_imagery_missing_message(
+                            w_gdf, w_start, w_end, bands, catalog_filepath=path,
+                            why=("no catalog tiles intersect the label polygons in-window"
+                                 if not fused else f"no {input_collection} catalog tiles "
+                                 "intersect the label polygons in-window"),
+                        ))
+                if gaps:
+                    uncovered.append("\n".join(gaps))
             # A window with no imagery is recorded known-empty by the build leg; only a
             # request with no imagery anywhere is a preflight failure.
             if len(uncovered) == len(checks):
@@ -1124,11 +1202,21 @@ def create_training_data(
     if download:
         # The catalog lives at `{root}/{collection}/catalog.parquet`, so the archive root is
         # its GRANDPARENT (the parent-name check ran in wave 1).
-        dst_folderpath = os.path.dirname(os.path.dirname(catalog_filepath.rstrip("/"))) or "."
+        dst_folderpath = archive_root if fused else (
+            os.path.dirname(os.path.dirname(catalog_filepath.rstrip("/"))) or ".")
         for w_roi, w_start, w_end in (
             [(w.shapefilepath, w.startdate, w.enddate) for w in window_units]
             or [(shapefilepath, startdate, enddate)]
         ):
+            if fused:
+                _download_verb(
+                    roi=w_roi, startdate=w_start, enddate=w_end, bands=None,
+                    dst_folderpath=dst_folderpath, creds=creds, source=source,
+                    inputs=list(all_inputs),
+                    max_tiles=max_tiles, cog=cog, storage=storage, runner=runner,
+                    runner_kwargs=runner_kwargs,
+                )
+                continue
             _download_verb(
                 roi=w_roi, startdate=w_start, enddate=w_end, bands=bands,
                 dst_folderpath=dst_folderpath, creds=creds, source=source,
@@ -1160,7 +1248,7 @@ def create_training_data(
             csv_filepath=csv_filepath, label_col=label_col, cores=cores,
             overwrite_setup_csv=build_overwrite, overwrite=build_overwrite, runner=runner,
             runner_kwargs=runner_kwargs, collection=collection,
-            properties_filter=properties_filter, processing=processing,
+            properties_filter=properties_filter, processing=processing, components=fused,
         )
     else:
         _create_datacube.run_create_datacube(
@@ -1172,6 +1260,7 @@ def create_training_data(
             overwrite_setup_csv=build_overwrite,
             overwrite=build_overwrite, runner=runner, runner_kwargs=runner_kwargs,
             collection=collection, properties_filter=properties_filter, processing=processing,
+            components=fused,
         )
 
     # Flatten phase delegates to `flatten_training_data` -- no duplicated reduce/
@@ -1257,6 +1346,7 @@ def _flatten_identity_from_request(
     adapter, feature_sequence, aggregate,
     properties_filter: Mapping[str, str | Sequence[str]] | None = None,
     processing: str | None = None,
+    components: Sequence[_create_datacube.Component] | None = None,
 ) -> dict:
     """The same identity `_flatten_identity` computes, but from the REQUEST rather than
     from `input.csv`.
@@ -1276,10 +1366,10 @@ def _flatten_identity_from_request(
     `gdf[id_col]` is sorted, for a `cubes` order that does not depend on shapefile row
     order.
     """
-    window_segment = _create_datacube.window_folder_segment(
+    window_segment = _create_datacube.request_segment(
         startdate, enddate, mosaic_days, bands=bands, mosaic_scheme=mosaic_scheme,
-        collection=collection, declaration=_collections.get(collection),
-        properties_filter=properties_filter, processing=processing,
+        collection=collection, properties_filter=properties_filter, processing=processing,
+        components=components,
     )
     # `input.csv` never gets a row for a shape `setup` found no imagery for, so
     # `_flatten_identity` -- computed FROM `input.csv` -- never names them either. Without
@@ -1294,15 +1384,18 @@ def _flatten_identity_from_request(
         )]
         for id_value in ids
     )
+    columns = _create_datacube.identity_columns(
+        collection=collection, bands=bands, properties_filter=properties_filter,
+        processing=processing, components=components)
     params = {
-        "bands": [",".join(bands)],
+        "bands": [columns["bands"]],
         "mosaic_days": [str(mosaic_days)],
         "startdate": [str(pd.to_datetime(startdate, utc=True))],
         "enddate": [str(pd.to_datetime(enddate, utc=True))],
-        "collection": [collection],
+        "collection": [columns["collection"]],
         "mosaic_scheme": [mosaic_scheme],
-        "properties_filter": [_create_datacube._canonicalize_properties_filter(properties_filter)],
-        "processing": [_create_datacube._canonicalize_processing(processing)],
+        "properties_filter": [columns["properties_filter"]],
+        "processing": [columns["processing"]],
         "aggregate": _fingerprint_aggregate(aggregate),
         "features": _fingerprint_features(adapter, feature_sequence),
     }
@@ -2009,8 +2102,10 @@ def run_inference(
     **`inputs=`** (ROI mode) replaces `collection`, `bands`, `properties_filter`, `processing`
     and `catalog_filepath` as in `create_training_data`, with `archive_root=` in place of
     `catalog_filepath`; `max_cloudcover` is not used. One input infers exactly as the scalar
-    arguments do; more than one raises until fusing several collections is supported.
+    arguments do; more than one infers over the fused cube `create_training_data` builds
+    (the same build-and-join task), with `required_bands` checked against its band list.
     """
+    components = None
     if inputs is None:
         _check_no_archive_root(archive_root)
         collection = config.SATELLITE_S2L2A if collection is None else collection
@@ -2027,6 +2122,7 @@ def run_inference(
         collection, bands, properties_filter, processing, catalog_filepath = (
             resolved[k] for k in ("collection", "bands", "properties_filter", "processing",
                                   "catalog_filepath"))
+        components = resolved["components"]
     # Non-local storage is accepted for ROI mode + runner="aml" only; the pre-built-cubes
     # path and local ROI mode stay local.
     roi_mode = roi is not None
@@ -2064,7 +2160,7 @@ def run_inference(
             catalog_filepath=catalog_filepath, startdate=startdate, enddate=enddate,
             mosaic_days=mosaic_days, bands=bands, grid_size_km=grid_size_km,
             scale_fact=scale_fact, collection=collection, properties_filter=properties_filter,
-            processing=processing,
+            processing=processing, components=components,
             predict_batch_size=predict_batch_size, skip_nan=skip_nan, merge=merge,
             merge_crs=merge_crs, cores=cores, cubes_per_task=cubes_per_task, overwrite=overwrite,
             collection_id=collection_id, dt=dt, runner=runner, runner_kwargs=runner_kwargs,
@@ -2262,6 +2358,7 @@ def _run_inference_roi(
     model, spec, roi, output_folderpath, errs, *,
     catalog_filepath, startdate, enddate, mosaic_days, bands,
     grid_size_km, scale_fact, collection, properties_filter=None, processing=None,
+    components=None,
     predict_batch_size, skip_nan, merge, merge_crs, cores, cubes_per_task, overwrite,
     collection_id, dt, runner="local", runner_kwargs=None, registry=None,
 ) -> InferenceResult:
@@ -2274,9 +2371,12 @@ def _run_inference_roi(
                       ("enddate", enddate), ("mosaic_days", mosaic_days), ("bands", bands)]:
         if val is None:
             errs.append(f"roi mode requires {name}=.")
-    errs += _processing.processing_errors(processing, collection=collection, allow_none=True)
+    errs += _processing_input_errors(processing, collection, components)
     if catalog_filepath is not None:
-        errs += _check_catalog_collection_dir(catalog_filepath, collection)
+        for c in components or [None]:
+            errs += _check_catalog_collection_dir(
+                catalog_filepath if c is None else c.catalog_filepath,
+                collection if c is None else c.collection)
     # Normalize dates HERE, before `compute_n_timestamps` or any dispatch: an unparseable
     # date must abort on the driver in milliseconds, not after a 40-380 s node cold-start.
     window_ok = False
@@ -2297,9 +2397,13 @@ def _run_inference_roi(
     # both must resolve to the same set for this check to mean anything.
     if bands is not None:
         bands = _native_bands(collection, bands)
-    required = set(_native_bands(collection, spec.get("required_bands") or []))
     want_t = int(spec.get("n_timestamps") or 0)
-    if bands is not None:
+    if components:
+        missing = _missing_fused_bands(spec.get("required_bands") or [], components)
+        if missing:
+            errs.append(f"the inputs' bands miss model-required {sorted(missing)}.")
+    elif bands is not None:
+        required = set(_native_bands(collection, spec.get("required_bands") or []))
         missing = required - set(bands)
         if missing:
             errs.append(f"bands is missing model-required {sorted(missing)}.")
@@ -2406,6 +2510,7 @@ def _run_inference_roi(
                 mosaic_days=mosaic_days,
                 csv_filepath=csv_filepath, label_col=None, collection=collection,
                 properties_filter=properties_filter, processing=processing,
+                components=components,
             )
         except ValueError as exc:
             raise PreflightError(_imagery_missing_message(

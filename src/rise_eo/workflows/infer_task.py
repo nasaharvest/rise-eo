@@ -52,6 +52,7 @@ def run_infer_task(
     predict_batch_size: int | None = None,
     skip_nan: bool = True,
     overwrite: bool = False,
+    fusion_filepath: str | None = None,
 ) -> str:
     """Build the cell's datacube (reuses `task.run_task`) then infer it to `output_filepath`.
 
@@ -83,6 +84,7 @@ def run_infer_task(
         if_missing_files=if_missing_files,
         njobs=njobs,
         njobs_load_images=njobs_load_images,
+        fusion_filepath=fusion_filepath,
     )
     datacube_filepath = os.path.join(export_folderpath, "datacube.npy")
     adapter = engine._adapter_from_bundle_cached(bundle_path)
@@ -133,6 +135,9 @@ def run_infer_group(
             njobs=njobs, njobs_load_images=njobs_load_images,
             predict_batch_size=predict_batch_size, skip_nan=skip_nan,
             overwrite=overwrite,
+            fusion_filepath=(str(r["fusion_filepath"])
+                             if "fusion_filepath" in r and pd.notna(r["fusion_filepath"])
+                             else None),
         )
         written.append(out)
     return written
