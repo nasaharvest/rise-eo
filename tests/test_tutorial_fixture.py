@@ -184,16 +184,20 @@ def test_pipeline_create_training_data_train_and_infer(tmp_path):
     startdate = gdf["timestamp"].min().to_pydatetime().replace(tzinfo=None)
     enddate = (gdf["timestamp"].max() + pd.Timedelta(days=1)).to_pydatetime().replace(tzinfo=None)
 
-    export_folderpath = str(tmp_path / "training")
-    td = rise_eo.create_training_data(
-        label_polygons=FIELDS_PATH, catalog_filepath=CATALOG_PATH,
-        startdate=startdate, enddate=enddate, mosaic_days=MOSAIC_DAYS,
-        bands=BANDS, id_col="fid", label_col="label",
-        export_folderpath=export_folderpath,
-    )
-    fields_gdf = fs.read_geo(FIELDS_PATH)
+    # One field per class: each field is one datacube build, and the test needs only the classes.
+    fields_gdf = fs.read_geo(FIELDS_PATH).sort_values("fid").groupby("label").head(1)
     n_expected_classes = fields_gdf["label"].nunique()
     assert n_expected_classes == 3
+    fields_path = str(tmp_path / "fields.geojson")
+    fields_gdf.to_file(fields_path, driver="GeoJSON")
+
+    export_folderpath = str(tmp_path / "training")
+    td = rise_eo.create_training_data(
+        label_polygons=fields_path, catalog_filepath=CATALOG_PATH,
+        startdate=startdate, enddate=enddate, mosaic_days=MOSAIC_DAYS,
+        bands=BANDS, id_col="fid", label_col="label",
+        export_folderpath=export_folderpath, cores=n_expected_classes,
+    )
 
     loaded = td.load()
     data, labels = loaded["data"], loaded["labels"]
