@@ -257,7 +257,7 @@ def _mosaic_from_intervals(datacube, index_intervals, mask_value):
     return out
 
 
-@numba.njit(cache=True)
+@numba.njit()
 def _median_mosaic_core(datacube: np.ndarray, ts_index_ranges: np.ndarray):
     n_ts, height, width, n_bands = datacube.shape
     n_mosaiced = ts_index_ranges.shape[0]

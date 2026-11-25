@@ -53,7 +53,7 @@ def modify_bands(bands: np.ndarray, band_indices: dict, sequence: list):
 # --- temporal interpolation kernel (ported from utils_preprocess) ------------
 
 
-@numba.njit(parallel=True, cache=True)
+@numba.njit(parallel=True)
 def _mask_interpolate_2D(band_data_2D: np.ndarray, mask_value=np.nan):
     """Per-row linear interpolation over the time axis (last axis), filling only
     masked positions. Rows that are all-valid or all-masked are left untouched."""
