@@ -84,6 +84,7 @@ serving = [        # P5 serving Tier 2 (spec 30): stac-geoparquet export. NOT ri
 dev = [
     "ruff",
     "pytest",
+    "pytest-xdist",
 ]
 
 [build-system]

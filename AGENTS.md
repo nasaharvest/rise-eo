@@ -15,7 +15,7 @@ Azure ML, with no cloud lock-in. Users train their own models; rise-eo does not.
 ```bash
 python3.11 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev,local,s3,notebooks,grid,azure,aml,mpc,titiler,serving]"   # the extras CI installs; the suite needs them
-.venv/bin/python -m pytest -q            # fast, synthetic, deterministic; network tests are off
+.venv/bin/python -m pytest -q -n auto    # fast, synthetic, deterministic, parallel; network tests are off
 .venv/bin/ruff check src/ tests/
 .venv/bin/python scripts/docs_kwarg_sweep.py   # calls in docs and notebooks match the real signatures
 ```
@@ -25,7 +25,7 @@ The first two lines download packages, so a person runs them once, before an age
 person to install it; do not run `pip` yourself. The last three lines are the checks you run.
 
 A git worktree has no `.venv`. Run tests there with
-`PYTHONPATH=src <main-checkout>/.venv/bin/python -m pytest -q -p no:cacheprovider`.
+`PYTHONPATH=src <main-checkout>/.venv/bin/python -m pytest -q -n auto -p no:cacheprovider`.
 
 ## How a change reaches `main`
 
