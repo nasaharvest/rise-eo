@@ -197,6 +197,8 @@ def test_create_training_data_orchestration(tmp_path, monkeypatch):
         fs.makedirs(export_folderpath)
         fs.save_npy(f"{export_folderpath}/data.npy", np.zeros((n_px, T, len(bands))))
         fs.save_npy(f"{export_folderpath}/ids.npy", np.zeros(n_px))
+        fs.save_npy(f"{export_folderpath}/window_starts.npy",
+                    np.zeros(n_px, dtype="datetime64[ns]"))
         fs.save_npy(f"{export_folderpath}/coords.npy", np.zeros((n_px, 2)))
         fs.save_npy(f"{export_folderpath}/labels.npy", np.array(["a"] * n_px))
         fs.save_npy(
@@ -219,7 +221,7 @@ def test_create_training_data_orchestration(tmp_path, monkeypatch):
 
     loaded = td.load()
     assert loaded["data"].shape == (n_px, T, len(bands))
-    assert set(loaded) == {"data", "ids", "coords", "metadata", "labels"}
+    assert set(loaded) == {"data", "ids", "window_starts", "coords", "metadata", "labels"}
 
 
 # --- characterisation of the shared preflight messages (#145 P10) ---------------

@@ -372,7 +372,7 @@ def _normalize_window(startdate, enddate) -> tuple[pd.Timestamp | None, pd.Times
 class TrainingData:
     """Handle to a completed training-data build (paths; lazy-load arrays)."""
 
-    export_folderpath: str      # data.npy / ids.npy / labels.npy / coords.npy / metadata.pickle.npy
+    export_folderpath: str      # data.npy / ids.npy / window_starts.npy / labels.npy / coords.npy / metadata.pickle.npy
     run_folderpath: str         # per-field datacubes + input.csv
     n_pixels: int
     n_timestamps: int
@@ -380,7 +380,7 @@ class TrainingData:
     feature_bands: list[str] | None = None   # set when a feature transform was applied
 
     def load(self) -> dict:
-        """Load the arrays into memory: data/ids/coords/metadata (+ labels if present).
+        """Load the arrays into memory: data/ids/window_starts/coords/metadata (+ labels if present).
 
         When a feature transform was applied (via `adapter=`/`feature_sequence=`), also loads
         `features`/`feature_ids`/`feature_labels` (the model-ready, possibly aggregated arrays).
@@ -450,6 +450,7 @@ def download(
     `{dst_folderpath}/{collection}/YYYY/MM/DD/{canonical granule name}/` and the catalog is
     `{dst_folderpath}/{collection}/catalog.parquet` (one catalog per collection directory).
     The canonical granule name keeps every processing field and drops every provider-specific
+            "window_starts": fs.load_npy(os.path.join(self.export_folderpath, "window_starts.npy")),
     one, so the same granule fetched from MPC and CDSE lands in ONE folder and ONE catalog row
     (`source` = `"cdse,mpc"`), while two processings of one acquisition coexist on disk.
 
@@ -1032,7 +1033,7 @@ def _fingerprint_features(adapter, feature_sequence) -> dict | None:
 
 
 def _flatten_output_names(*, label_col, want_features: bool) -> list[str]:
-    names = ["data.npy", "coords.npy", "ids.npy", TRAINING_METADATA_NAME]
+    names = ["data.npy", "coords.npy", "ids.npy", "window_starts.npy", TRAINING_METADATA_NAME]
     if label_col is not None:
         names.append("labels.npy")
     if want_features:

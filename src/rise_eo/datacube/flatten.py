@@ -3,8 +3,8 @@
 Spec: specs/05-flatten.md. Folds in datacube_flatten_2d.
 
 Outputs (via rise_eo.storage): data.npy (pixels,t,b), coords.npy (pixels,2) [lon/lat in
-EPSG:4326], ids.npy, labels.npy (optional), metadata.pickle.npy. Raises if datacubes
-disagree on bands/timestamps.
+EPSG:4326], ids.npy, window_starts.npy (UTC window start per sample), labels.npy (optional),
+metadata.pickle.npy. Raises if datacubes disagree on bands or on the number of timestamps.
 
 Coords are reprojected from each cube's native CRS to EPSG:4326 (lon, lat) before
 concatenation (TODO #16): a training set spanning two UTM zones would otherwise mix
@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 
 import numpy as np
+import pandas as pd
 import rasterio.crs
 import rasterio.transform
 import rasterio.warp
@@ -40,8 +41,9 @@ def flatten(
 
     For each datacube `(t, H, W, b)`, keep pixels that are not entirely nodata
     across time+band -> `(pixels, t, b)`, concatenate across datacubes, and repeat
-    `id` (and `label`) per pixel. All datacubes must share the same `bands` and
-    `timestamps` (raises otherwise).
+    `id` (and `label`) per pixel. All datacubes must share the same `bands` and the same
+    number of `timestamps` (raises otherwise); their dates may differ, and `window_starts.npy`
+    records each sample's first timestamp.
     """
     metadata_filepaths = [
         os.path.join(os.path.dirname(fp), CUBE_METADATA_NAME)
@@ -50,16 +52,17 @@ def flatten(
     common_metadata = _check_metadata_consistency(metadata_filepaths)
     provenance = common_metadata.pop("provenance", None)
 
-    data_list, coords_list, id_list = [], [], []
+    data_list, coords_list, id_list, window_list = [], [], [], []
     label_list = [] if label_col is not None else None
 
     for _, row in filepaths_df.iterrows():
-        data_2d, coords_2d = _read_datacube_2d(row[filepath_col], nodata=nodata)
+        data_2d, coords_2d, window_start = _read_datacube_2d(row[filepath_col], nodata=nodata)
         data_list.append(data_2d)
         coords_list.append(coords_2d)
 
         n_pixels = data_2d.shape[0]
         id_list += [row[id_col]] * n_pixels
+        window_list += [window_start] * n_pixels
         if label_col is not None:
             label_list += [row[label_col]] * n_pixels
 
@@ -74,6 +77,8 @@ def flatten(
     fs.save_npy(os.path.join(export_folderpath, "data.npy"), data)
     fs.save_npy(os.path.join(export_folderpath, "coords.npy"), coords)
     fs.save_npy(os.path.join(export_folderpath, "ids.npy"), np.array(id_list))
+    fs.save_npy(os.path.join(export_folderpath, "window_starts.npy"),
+                np.array(window_list, dtype="datetime64[ns]"))
     fs.save_npy(os.path.join(export_folderpath, TRAINING_METADATA_NAME),
                 common_metadata, allow_pickle=True)
     if label_col is not None:
@@ -85,7 +90,8 @@ def flatten(
 
 def _check_metadata_consistency(metadata_filepaths, check_attributes=("bands",
                                                                        "timestamps")):
-    """All datacubes must agree on `bands` and `timestamps`; return the common ones."""
+    """All datacubes must agree on `bands` and on the NUMBER of `timestamps`; return the
+    first cube's."""
     common = {attr: None for attr in check_attributes}
     provenance_blocks = []
     for mfp in metadata_filepaths:
@@ -94,7 +100,11 @@ def _check_metadata_consistency(metadata_filepaths, check_attributes=("bands",
             cur = metadata[attr]
             if common[attr] is None:
                 common[attr] = cur
-            elif cur != common[attr]:
+            elif attr == "timestamps" and len(cur) != len(common[attr]):
+                raise ValueError(
+                    f"Attribute timestamps are not consistent: {mfp} has {len(cur)} "
+                    f"timestamps, the first cube has {len(common[attr])}.")
+            elif attr != "timestamps" and cur != common[attr]:
                 raise ValueError(f"Attribute {attr} are not consistent.")
         provenance_blocks.append(metadata.get("provenance"))
     merged = processing_module.merge_provenance(provenance_blocks, with_ids=False)
@@ -105,7 +115,8 @@ def _check_metadata_consistency(metadata_filepaths, check_attributes=("bands",
 
 def _read_datacube_2d(filepath: str, nodata: int = 0):
     """Load a `(t, H, W, b)` datacube, keep pixels that aren't entirely nodata across
-    time+band -> `(pixels, t, b)`, and return their (lon, lat) coords in EPSG:4326."""
+    time+band -> `(pixels, t, b)`, and return their (lon, lat) coords in EPSG:4326 and the
+    cube's window start (its first timestamp, as naive UTC)."""
     datacube = fs.load_npy(filepath)
     nt, _, _, nb = datacube.shape  # asserts 4-D
 
@@ -120,7 +131,9 @@ def _read_datacube_2d(filepath: str, nodata: int = 0):
                                  transform=gt["transform"])
     coords_2d = en[h_idx, w_idx, :]                        # (pixels, 2) native CRS
     coords_2d = _to_lonlat(coords_2d, gt.get("crs"))       # -> EPSG:4326 (lon, lat)
-    return data_2d, coords_2d
+    window_start = pd.Timestamp(metadata["timestamps"][0])
+    window_start = window_start.tz_localize("UTC") if window_start.tzinfo is None else window_start
+    return data_2d, coords_2d, window_start.tz_convert("UTC").tz_localize(None).to_datetime64()
 
 
 def _to_lonlat(coords_2d, src_crs):

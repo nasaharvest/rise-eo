@@ -272,6 +272,8 @@ def _fake_flatten_training_data(
     fs.makedirs(export_folderpath)
     fs.save_npy(os.path.join(export_folderpath, "data.npy"), np.zeros((1, 1, 1)))
     fs.save_npy(os.path.join(export_folderpath, "ids.npy"), np.array([0]))
+    fs.save_npy(os.path.join(export_folderpath, "window_starts.npy"),
+                np.array(["2018-01-01"], dtype="datetime64[ns]"))
     fs.save_npy(os.path.join(export_folderpath, "coords.npy"), np.zeros((1, 2)))
     fs.save_npy(os.path.join(export_folderpath, "metadata.pickle.npy"),
                 {"timestamps": [0], "bands": ["B04"]}, allow_pickle=True)
