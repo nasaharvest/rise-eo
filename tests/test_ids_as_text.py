@@ -22,6 +22,8 @@ from rise_eo.storage import fs
 from rise_eo.workflows import create_datacube, flatten, infer_shard, runners, shard
 from rise_eo.workflows.unit_csv import read_unit_csv
 
+pytestmark = pytest.mark.usefixtures("stub_lineage")
+
 IDS = ["001", "1e5", "007"]
 
 

@@ -18,6 +18,8 @@ import rise_eo
 from rise_eo.api import _merge_outputs
 from rise_eo.model import BaseModelAdapter
 
+pytestmark = pytest.mark.usefixtures("stub_lineage")
+
 
 class _Tiny(BaseModelAdapter):
     required_bands = ["B04", "B08"]

@@ -611,6 +611,18 @@ def collection_to_declaration(collection: pystac.Collection) -> CollectionDeclar
 
 # --- serialization -----------------------------------------------------------
 
+PROCESSING_EXTENSION = "https://stac-extensions.github.io/processing/v1.1.0/schema.json"
+
+
+def _add_processing(obj, processing: dict) -> None:
+    """Put the processing extension's `software` and `lineage` fields on a Collection or an Item."""
+    fields = obj.properties if isinstance(obj, pystac.Item) else obj.extra_fields
+    fields["processing:software"] = processing["software"]
+    fields["processing:lineage"] = processing["lineage"]
+    if PROCESSING_EXTENSION not in obj.stac_extensions:
+        obj.stac_extensions.append(PROCESSING_EXTENSION)
+
+
 def write_stac_catalog(
     items: list[pystac.Item],
     dst_folderpath: str,
@@ -619,12 +631,18 @@ def write_stac_catalog(
     collection_id: str | None = None,
     description: str = "rise-eo tile catalog (STAC export).",
     declaration: CollectionDeclaration | None = None,
+    processing: dict | None = None,
 ) -> str:
     """Write a static, self-contained STAC catalog (catalog.json + collection + item JSONs).
 
     `declaration`, if given, is mirrored onto the Collection -- additive, never
     authoritative: the catalog Parquet footer wins on disagreement. `None` (the default)
     writes no mirror, e.g. for a hand-built item list with no catalog behind it.
+
+    `processing` (`software`: `{name: version}`, `lineage`: a statement, `lineage_filepath`: the
+    `lineage.json`, which sits in `dst_folderpath`'s parent) puts `processing:software` and
+    `processing:lineage` on the Collection and every Item and links the file from the
+    Collection as an asset with role `metadata`.
 
     Returns the catalog.json path. Written through `rise_eo.storage`.
     """
@@ -645,6 +663,12 @@ def write_stac_catalog(
         extent=pystac.Extent(spatial=spatial, temporal=temporal),
     )
     collection.add_items(items)
+    if processing is not None:
+        for obj in (collection, *items):
+            _add_processing(obj, processing)
+        collection.add_asset("lineage", pystac.Asset(
+            href=f"../../{os.path.basename(processing['lineage_filepath'])}",
+            media_type="application/json", roles=["metadata"], title="lineage.json"))
     if declaration is not None:
         _stamp_collection_declaration(collection, declaration)
 

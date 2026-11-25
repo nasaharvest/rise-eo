@@ -172,12 +172,9 @@ def set_alias(
 
 def _bundle_content_rels(manifest: dict) -> list[str]:
     """The file set the content digest is computed over: the manifest itself, every artifact,
-    every embedded code file -- exactly what `bundle.load` needs, and nothing a caller
-    happened to drop beside it."""
-    rels = {bundle_mod.BUNDLE_MANIFEST}
-    rels.update(manifest.get("artifacts", {}).values())
-    rels.update(bundle_mod.manifest_code_files(manifest))
-    return sorted(rels)
+    every embedded code file and the training lineage -- exactly what a bundle holds, and
+    nothing a caller happened to drop beside it."""
+    return sorted({bundle_mod.BUNDLE_MANIFEST, *bundle_mod.manifest_files(manifest)})
 
 
 def _read_bundle_content(base_path: str, storage_options: dict | None) -> list[tuple[str, bytes]]:

@@ -11,6 +11,8 @@ import rise_eo
 from rise_eo import api
 from rise_eo.api import PreflightError
 
+pytestmark = pytest.mark.usefixtures("stub_lineage")
+
 # --- CollectionInput ---------------------------------------------------------------------
 
 

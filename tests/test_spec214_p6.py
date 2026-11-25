@@ -6,7 +6,10 @@ import json
 import os
 
 import numpy as np
+import pandas as pd
 import pytest
+import rasterio
+from rasterio.transform import from_origin
 from test_spec214_p5 import (
     END,
     S1_IN,
@@ -14,12 +17,17 @@ from test_spec214_p5 import (
     START,
     Env,
     _fake_runners,
+    _polygons,
+    _run_row,
     _train,
 )
 
 import rise_eo
-from rise_eo import lineage
+from rise_eo import api, lineage
 from rise_eo.datacube import builder
+from rise_eo.model import BaseModelAdapter
+from rise_eo.model import bundle as bundle_mod
+from rise_eo.storage import fs  # noqa: F401
 
 
 def _lineage_of(td):
@@ -132,7 +140,7 @@ def test_an_edited_feature_body_changes_the_recorded_source_hash():
 
 
 def test_each_cube_records_its_builder_code(tmp_path, monkeypatch):
-    from test_spec214_p5 import _cube, _run_row
+    from test_spec214_p5 import _cube
 
     env = Env(tmp_path)
     row = env.setup().iloc[0]
@@ -198,5 +206,169 @@ def test_the_driver_code_is_recorded_beside_the_build_code(trained):
     assert doc["determinism"]["overlapping_mgrs_tiles"] == {}
 
 
-# keep START/END/S1_IN/S2_IN referenced for readers of this module
-_ = (START, END, S1_IN, S2_IN)
+
+# --- D9 + inference lineage -----------------------------------------------------------------
+
+
+class _Stub(BaseModelAdapter):
+    required_bands = ["B08", "vv"]
+    n_timestamps = 1
+    output_dtype = "uint8"
+    output_nodata = 255
+    output_band_names = ["c"]
+    feature_sequence = []
+
+    def load(self):
+        pass
+
+    def predict(self, X):
+        return X[:, 0].astype("uint8")
+
+
+def _save_bundle(tmp_path, name, training_data=None):
+    return bundle_mod.save(_Stub(), {}, str(tmp_path / name), code=False, training_data=training_data,
+                           verbose=False)
+
+
+def _write_output(path):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with rasterio.open(path, "w", driver="GTiff", height=2, width=2, count=1, dtype="uint8",
+                       crs="EPSG:4326", transform=from_origin(15, 48, 0.01, 0.01), nodata=255) as dst:
+        dst.write(np.ones((1, 2, 2), dtype="uint8"))
+
+
+@pytest.fixture
+def infer_env(tmp_path, monkeypatch):
+    """A trained fused set, plus the ROI-mode plumbing faked below the per-cell task."""
+    import types
+
+    import rise_eo.grid as grid_mod
+    from rise_eo.workflows import runners
+
+    env = Env(tmp_path)
+    _fake_runners(monkeypatch)
+    td = _train(env, tmp_path)
+    cell = _polygons(env).rename(columns={"fid": "id"})[["id", "geometry"]]
+    monkeypatch.setattr(grid_mod, "roi_to_s2_grids", lambda *a, **kw: cell)
+    ran = []
+
+    def run_local_inference(csv, **kw):
+        for _, row in pd.read_csv(csv).iterrows():
+            _run_row(row)
+            _write_output(os.path.join(row["export_folderpath"], "output.tif"))
+            ran.append(row["id"])
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(runners, "run_local_inference", run_local_inference)
+    return env, td, ran
+
+
+def _infer(env, tmp_path, bundle, out="out", **kw):
+    args = dict(roi=_polygons(env), inputs=[S2_IN, S1_IN], archive_root=str(tmp_path / "archive"),
+                startdate=START, enddate=END, mosaic_days="month",
+                output_folderpath=str(tmp_path / out))
+    args.update(kw)
+    return rise_eo.run_inference(bundle, **args)
+
+
+def test_a_bundle_saved_with_training_data_holds_the_training_lineage(infer_env, tmp_path):
+    env, td, _ = infer_env
+    b = _save_bundle(tmp_path, "b", training_data=td)
+    manifest = bundle_mod.read_spec(b)
+    assert manifest["training_lineage"] == "lineage.json"
+    assert lineage.read(os.path.join(b, "lineage.json")) == _lineage_of(td)
+    again = _save_bundle(tmp_path, "b2", training_data=td.export_folderpath)   # a path works too
+    assert bundle_mod.read_training_lineage(again)["statement"] == _lineage_of(td)["statement"]
+    with pytest.raises(FileNotFoundError, match="create_training_data"):
+        _save_bundle(tmp_path, "b3", training_data=str(tmp_path / "nowhere"))
+
+
+def test_the_registry_digest_covers_the_training_lineage(infer_env, tmp_path):
+    from rise_eo.model import registry
+
+    env, td, _ = infer_env
+    plain = registry.content_digest(_save_bundle(tmp_path, "plain"))
+    with_lineage = registry.content_digest(_save_bundle(tmp_path, "with", training_data=td))
+    assert plain != with_lineage
+
+
+def test_inference_with_the_same_inputs_passes_and_writes_lineage_and_stac(infer_env, tmp_path):
+    env, td, ran = infer_env
+    bundle = _save_bundle(tmp_path, "b", training_data=td)
+    result = _infer(env, tmp_path, bundle)
+    assert ran == ["c1"]
+    out = tmp_path / "out"
+    doc = lineage.read(str(out / "lineage.json"))
+    assert [s["step"] for s in doc["process_steps"]] == [
+        "download", "mask", "resample", "mosaic", "fuse", "predict"]
+    assert doc["model"]["digest"].startswith("sha256:") and doc["model"]["given"] == bundle
+    assert doc["training_lineage"] == _lineage_of(td)
+    assert doc["sources"]["grid"]["n_cells"] == 1 and doc["sources"]["roi"]["n_features"] == 1
+    assert [c["granule_ids"] for c in doc["sources"]["collections"]] == [["s2_0", "s2_1"], ["s1_0", "s1_1"]]
+    assert doc["request"]["verb"] == "run_inference"
+    assert "output_folderpath" not in doc["request"]["arguments"]
+    with open(out / "geometry.geojson", "rb") as f:
+        assert hashlib.sha256(f.read()).hexdigest() == doc["sources"]["roi"]["sha256"]
+
+    collection_path = next((out / "stac").rglob("collection.json"))
+    collection = json.loads(collection_path.read_text())
+    assert collection["processing:software"]["rise-eo"] == doc["software"]["rise-eo"]
+    assert collection["processing:lineage"] == doc["statement"]
+    asset = collection["assets"]["lineage"]
+    assert asset["roles"] == ["metadata"]
+    assert (collection_path.parent / asset["href"]).resolve() == (out / "lineage.json").resolve()
+    items = [json.loads(p.read_text()) for p in (out / "stac").rglob("*.json")]
+    items = [i for i in items if i.get("type") == "Feature"]
+    assert items and all(i["properties"]["processing:lineage"] == doc["statement"] for i in items)
+    assert result.stac_catalog_filepath.endswith("catalog.json")
+
+
+def test_a_different_properties_filter_is_refused_before_any_job_starts(infer_env, tmp_path):
+    env, td, ran = infer_env
+    bundle = _save_bundle(tmp_path, "b", training_data=td)
+    both = rise_eo.CollectionInput("sentinel-1-rtc", ["vv"],
+                                   properties_filter={"sat:orbit_state": ["ascending", "descending"]})
+    with pytest.raises(rise_eo.PreflightError) as exc:
+        _infer(env, tmp_path, bundle, inputs=[S2_IN, both])
+    message = str(exc.value)
+    assert "properties_filter" in message and "'descending'" in message and "ascending" in message
+    assert ran == []
+
+
+def test_other_differences_name_the_field_and_both_values(infer_env, tmp_path):
+    env, td, ran = infer_env
+    bundle = _save_bundle(tmp_path, "b", training_data=td)
+    vh = rise_eo.CollectionInput("sentinel-1-rtc", ["vh"], properties_filter={"sat:orbit_state": "descending"})
+    with pytest.raises(rise_eo.PreflightError, match=r"bands of sentinel-1-rtc.*\['vv'\].*\['vh'\]"):
+        _infer(env, tmp_path, bundle, inputs=[S2_IN, vh])
+    with pytest.raises(rise_eo.PreflightError, match="collections"):
+        _infer(env, tmp_path, bundle, inputs=[S2_IN])
+    with pytest.raises(rise_eo.PreflightError, match="period"):
+        _infer(env, tmp_path, bundle, mosaic_days=10)
+    assert ran == []
+
+
+def test_a_bundle_without_training_lineage_prints_one_line_and_runs(infer_env, tmp_path, capsys):
+    env, td, ran = infer_env
+    _infer(env, tmp_path, _save_bundle(tmp_path, "plain"))
+    assert ran == ["c1"]
+    assert capsys.readouterr().out.count("saved without training lineage") == 1
+    assert lineage.read(str(tmp_path / "out" / "lineage.json"))["training_lineage"] is None
+
+
+def test_inference_on_prebuilt_cubes_prints_one_line_and_writes_a_short_lineage(infer_env, tmp_path,
+                                                                            monkeypatch, capsys):
+    env, td, _ = infer_env
+    row = env.setup(run=str(tmp_path / "prebuilt"), label_col=None).iloc[0]
+    _run_row(row)
+    cube = os.path.join(row["export_folderpath"], "datacube.npy")
+    monkeypatch.setattr(api._engine, "run_local", lambda model, pairs, **kw: [
+        _write_output(out) or out for _, out in pairs])
+    out = tmp_path / "prebuilt_out"
+    api.run_inference(_save_bundle(tmp_path, "b", training_data=td), inference_datacubes=[cube],
+                      output_folderpath=str(out))
+    assert capsys.readouterr().out.count("pre-built cubes: there is no request") == 1
+    doc = lineage.read(str(out / "lineage.json"))
+    assert doc["sources"] == {"inference_datacubes": [cube]}
+    assert [s["step"] for s in doc["process_steps"]] == ["predict"]
+    assert doc["model"]["digest"].startswith("sha256:")

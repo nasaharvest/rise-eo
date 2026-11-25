@@ -58,7 +58,7 @@ def fetch_bundle_to_scratch(bundle_url: str, local_dir: str) -> str:
         manifest = json.load(f)
     with open(os.path.join(local_dir, _bundle.BUNDLE_MANIFEST), "w") as f:
         json.dump(manifest, f)
-    rels = list(manifest.get("artifacts", {}).values()) + _bundle.manifest_code_files(manifest)
+    rels = _bundle.manifest_files(manifest)
     for rel in rels:
         dst = os.path.join(local_dir, rel)
         os.makedirs(os.path.dirname(dst), exist_ok=True)   # code/ has subdirectories

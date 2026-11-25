@@ -345,6 +345,69 @@ def write_training(
     write(os.path.join(export_folderpath, LINEAGE_NAME), doc)
 
 
+def _predict_step(spec: dict, *, predict_batch_size, skip_nan) -> dict:
+    return {"step": "predict", "description": "The model run over each datacube, one COG per cube.",
+            "parameters": {"adapter": spec.get("adapter"), "required_bands": spec.get("required_bands"),
+                           "n_timestamps": spec.get("n_timestamps"),
+                           "predict_batch_size": predict_batch_size, "skip_nan": skip_nan}}
+
+
+def cube_facts(metadata_filepaths: Sequence[str]) -> dict:
+    """`CubeFacts.result()` over the cubes whose metadata files are `metadata_filepaths`."""
+    import concurrent.futures
+
+    facts = CubeFacts()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=16) as pool:
+        for metadata in pool.map(lambda p: fs.load_npy(p, allow_pickle=True)[()], metadata_filepaths):
+            facts.add(metadata)
+    return facts.result()
+
+
+def write_inference(
+    output_folderpath: str, *, request: dict, runner: str, roi: gpd.GeoDataFrame,
+    roi_path: str | None, grid_size_km: float, scale_fact: float, n_cells: int,
+    inputs: Sequence[dict], facts: dict, mosaic_days, startdate, enddate, n_timestamps: int,
+    spec: dict, model: dict, training_lineage: dict | None, predict_batch_size, skip_nan,
+) -> dict:
+    """Write `lineage.json` and `geometry.geojson` next to the STAC catalog; returns the document."""
+    name = os.path.basename(roi_path.rstrip("/")) if roi_path else "an in-memory GeoDataFrame"
+    sources = {
+        "roi": {"path": roi_path, "file": GEOMETRY_NAME,
+                "sha256": write_geometry(roi, output_folderpath), "n_features": len(roi)},
+        "grid": {"grid_size_km": grid_size_km, "scale_fact": scale_fact, "n_cells": n_cells},
+        "collections": source_collections(inputs, facts, facts["provenance"]),
+    }
+    steps = process_steps(
+        inputs, mosaic_days=mosaic_days, startdate=startdate, enddate=enddate, per_polygon=False,
+        n_timestamps=n_timestamps, download=False, source=None,
+    ) + [_predict_step(spec, predict_batch_size=predict_batch_size, skip_nan=skip_nan)]
+    doc = document(
+        statement=statement_for(
+            f"Inference with {model['given']} over {n_cells} grid cells of {name}", inputs,
+            mosaic_days=mosaic_days, n_timestamps=n_timestamps),
+        runner=runner, request=request, sources=sources, steps=steps, facts=facts,
+        extra={"model": model, "training_lineage": training_lineage},
+    )
+    write(os.path.join(output_folderpath, LINEAGE_NAME), doc)
+    return doc
+
+
+def write_prebuilt(
+    output_folderpath: str, *, request: dict, runner: str, cubes: Sequence[str], spec: dict,
+    model: dict, training_lineage: dict | None, predict_batch_size, skip_nan,
+) -> dict:
+    """Write the short `lineage.json` of inference on pre-built cubes: their paths, the model and `predict`."""
+    doc = document(
+        statement=f"Inference with {model['given']} over {len(cubes)} pre-built datacubes.",
+        runner=runner, request=request, sources={"inference_datacubes": list(cubes)},
+        steps=[_predict_step(spec, predict_batch_size=predict_batch_size, skip_nan=skip_nan)],
+        facts={"build_code": []},
+        extra={"model": model, "training_lineage": training_lineage},
+    )
+    write(os.path.join(output_folderpath, LINEAGE_NAME), doc)
+    return doc
+
+
 def write(path: str, doc: dict) -> None:
     """Write `doc` as `path`."""
     fs.write_text(path, json.dumps(doc, indent=2, default=str))
