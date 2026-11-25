@@ -31,7 +31,7 @@ def test_collection_input_is_exported_frozen_and_keyword_only_after_bands():
 def test_builtin_collections_declare_pairwise_disjoint_bands():
     from rise_eo.collections import BUILTIN_MODULES, REGISTRY
 
-    assert {m.COLLECTION_ID for m in BUILTIN_MODULES} <= set(REGISTRY)
+    assert {m.COLLECTION_ID for m in BUILTIN_MODULES} == set(REGISTRY)
     owner: dict[str, str] = {}
     for module in BUILTIN_MODULES:
         assert module.BANDS, f"{module.COLLECTION_ID} declares no BANDS"
