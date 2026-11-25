@@ -238,12 +238,6 @@ def test_download_leg_gets_the_inputs_arguments(tmp_path, monkeypatch):
         assert (call["runner"], call["processing"]) == (runner, "latest")
 
 
-def test_training_with_two_inputs_is_not_supported_yet(tmp_path):
-    with pytest.raises(PreflightError, match="not supported yet"):
-        _train(tmp_path, "x", catalog_filepath=None, bands=None, archive_root=str(tmp_path),
-               inputs=[S2, S1])
-
-
 @pytest.mark.parametrize("extra, match", [
     ({"collection": "sentinel-2-l2a"}, r"inputs= replaces .*collection"),
     ({"properties_filter": {"a": "b"}}, r"inputs= replaces .*properties_filter"),
@@ -334,11 +328,6 @@ def test_inference_inputs_carry_the_inputs_filter_and_processing(tmp_path, monke
                  inputs=[rise_eo.CollectionInput(
                      "sentinel-2-l2a", ["B04", "B08"], processing=">=05.00")])
     assert got["processing"] == ">=05.00"
-
-
-def test_inference_with_two_inputs_is_not_supported_yet(tmp_path, monkeypatch):
-    with pytest.raises(PreflightError, match="not supported yet"):
-        _infer(tmp_path, monkeypatch, archive_root=str(tmp_path), inputs=[S2, S1])
 
 
 @pytest.mark.parametrize("extra, match", [
