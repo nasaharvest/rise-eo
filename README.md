@@ -91,8 +91,14 @@ catalog = rise_eo.download(
   before the first download, so a bad Sentinel-1 input fails before the Sentinel-2 download is paid
   for. `download` then returns `{collection: catalog_filepath}`. `create_training_data` and
   `run_inference` take the same `inputs=` with `archive_root="data/imagery"` in place of
-  `catalog_filepath`; one input builds exactly as the scalar arguments do, and more than one raises
-  until fused cubes land.
+  `catalog_filepath`; one input builds exactly as the scalar arguments do. More than one builds a
+  **fused** cube per polygon or grid cell: the first input (it must declare a reference band, as
+  `sentinel-2-l2a` does with B08) is built as usual, every other input is built onto its grid, and the
+  cubes are joined along the band axis in `inputs` order into one `float32` cube with nodata 0. Each
+  other input is read with the shape buffered by two reference pixels and blanked outside the shape, so
+  its footprint equals the first input's. A polygon any input has no imagery for in its window is skipped
+  and the skip line names the collection. Inference builds the same cube, and `adapter.required_bands`
+  names bands of the fused cube (a mask band dropped after masking is not one).
 
 ## 2. Build training data
 
