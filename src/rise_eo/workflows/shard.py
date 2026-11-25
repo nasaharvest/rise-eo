@@ -23,10 +23,9 @@ import os  # noqa: E402
 import tempfile  # noqa: E402
 import time  # noqa: E402
 
-import pandas as pd  # noqa: E402
-
 from rise_eo.storage import fs  # noqa: E402
 from rise_eo.workflows import runners  # noqa: E402
+from rise_eo.workflows.unit_csv import read_unit_csv  # noqa: E402
 
 EXPORT_FOLDERPATH_COL = "export_folderpath"
 
@@ -50,7 +49,7 @@ def run_shard(shard_csv_url: str, *, cores: int) -> dict:
     """Materialize `shard_csv_url` locally, run it via `runners.run_local`, and publish
     a `_status/<k>.json` shaped like a spec-24 `_result.json`."""
     with fs.open(shard_csv_url, "r") as f:
-        shard_df = pd.read_csv(f)
+        shard_df = read_unit_csv(f)
 
     fd, local_csv = tempfile.mkstemp(suffix=".csv", prefix="rise-eo-shard-")
     os.close(fd)

@@ -34,6 +34,7 @@ from rise_eo.sources import mpc as _mpc
 from rise_eo.sources.cdse import CdseCredentials as _CdseCredentials
 from rise_eo.sources.cdse import query_catalog as _cdse_query_catalog
 from rise_eo.storage import fs
+from rise_eo.workflows.unit_csv import read_unit_csv
 
 _SNAKEFILE = "workflows/_snakefiles/create_datacube/Snakefile"
 _INFER_SNAKEFILE = "workflows/_snakefiles/create_inference/Snakefile"
@@ -172,7 +173,7 @@ def run_local_inference(
     `run_aml`/`run_aml_inference`.
     """
     with fs.open(input_csv, "r") as f:
-        _dupe_errs = _duplicate_unit_errors(pd.read_csv(f).to_dict("records"))
+        _dupe_errs = _duplicate_unit_errors(read_unit_csv(f).to_dict("records"))
     if _dupe_errs:
         raise ValueError("run_local_inference preflight failed:\n  - " + "\n  - ".join(_dupe_errs))
 
@@ -456,7 +457,7 @@ def _aml_preflight(ml_client, *, cluster: str, environment: str, root: str,
         errs.append(f"input_csv does not exist: {input_csv!r}")
     else:
         with fs.open(input_csv, "r") as f:
-            rows = pd.read_csv(f).to_dict("records")
+            rows = read_unit_csv(f).to_dict("records")
         if len(rows) == 0:
             errs.append(f"input_csv is empty: {input_csv!r}")
         else:
@@ -710,7 +711,7 @@ def run_aml(
     run_root = f"{root.rstrip('/')}/runs/{run_id}"
 
     with fs.open(input_csv, "r") as f:
-        units = pd.read_csv(f).to_dict("records")
+        units = read_unit_csv(f).to_dict("records")
     shards = shard_units(units, n_shards)
 
     aml_command = _import_aml_command()
@@ -754,7 +755,7 @@ def _aml_flatten_preflight(
         errs.append(f"input_csv does not exist: {input_csv!r}")
     else:
         with fs.open(input_csv, "r") as f:
-            df = pd.read_csv(f)
+            df = read_unit_csv(f, id_col)
         if len(df) == 0:
             errs.append(f"input_csv is empty: {input_csv!r}")
         else:
@@ -885,7 +886,7 @@ def _aml_inference_preflight(
         errs.append(f"input_csv does not exist: {input_csv!r}")
     else:
         with fs.open(input_csv, "r") as f:
-            rows = pd.read_csv(f).to_dict("records")
+            rows = read_unit_csv(f).to_dict("records")
         if len(rows) == 0:
             errs.append(f"input_csv is empty: {input_csv!r}")
         else:
@@ -984,7 +985,7 @@ def run_aml_inference(
                              poll_interval_seconds=poll_interval_seconds)
 
     with fs.open(input_csv, "r") as f:
-        units = pd.read_csv(f).to_dict("records")
+        units = read_unit_csv(f).to_dict("records")
     shards = shard_units(units, n_shards)
 
     jobs: dict[int, object] = {}

@@ -41,8 +41,8 @@ from rise_eo.datacube import ops
 from rise_eo.datacube.files import CUBE_METADATA_NAME, CUBE_NAME
 from rise_eo.storage import fs
 from rise_eo.workflows import runners
+from rise_eo.workflows.unit_csv import COL_ID, read_unit_csv
 
-COL_ID = "id"
 COL_LABEL = "label"
 
 # A unit's CONTENT identity: same id + params means the same work, safe to collapse to one
@@ -238,7 +238,7 @@ def _append_input_rows(
 
     if fs.exists(csv_filepath):
         with fs.open(csv_filepath, "r") as f:
-            input_df = pd.concat([pd.read_csv(f), input_df], ignore_index=True)
+            input_df = pd.concat([read_unit_csv(f), input_df], ignore_index=True)
     input_df = _dedupe_on_unit_identity(input_df)
     with fs.open(csv_filepath, "w") as f:
         input_df.to_csv(f, index=False)
@@ -778,7 +778,7 @@ def _current_rows(
     existing_ids: set[str] = set()
     if fs.exists(csv_filepath):
         with fs.open(csv_filepath, "r") as f:
-            existing_df = pd.read_csv(f)
+            existing_df = read_unit_csv(f)
         if len(existing_df):
             keep_mask = existing_df.apply(keep, axis=1)
             existing_df = existing_df.loc[keep_mask]
@@ -925,7 +925,7 @@ def build_shortfall_only(
             return len(present_ids), n_missing, n_known_empty
 
     with fs.open(csv_filepath, "r") as f:
-        after_df = pd.read_csv(f)
+        after_df = read_unit_csv(f)
     built_ids = set(after_df[COL_ID].astype(str)) if len(after_df) else set()
     newly_empty = [str(srow[id_col]) for srow in missing_srows
                    if str(srow[id_col]) not in built_ids]
@@ -950,7 +950,7 @@ def _build_shortfall(csv_filepath: str, *, force: bool) -> tuple[str, int, int]:
     100%.
     """
     with fs.open(csv_filepath, "r") as f:
-        df = pd.read_csv(f)
+        df = read_unit_csv(f)
     n_total = len(df)
     if force:
         return csv_filepath, n_total, n_total
@@ -1170,7 +1170,7 @@ def run_create_datacube_windows(
         if not fs.exists(window_csv):
             continue
         with fs.open(window_csv, "r") as f:
-            df = pd.read_csv(f, dtype={COL_ID: str})
+            df = read_unit_csv(f)
         frames.append(df[df[COL_ID].isin(w.ids)])
     merged = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
     if len(merged) == 0:
