@@ -1152,14 +1152,21 @@ def run_create_datacube_windows(
             properties_filter=properties_filter, processing=processing,
         )
         window_csv = os.path.join(run_folderpath, segment, "input.csv")
-        _prepare_input_csv(
-            catalog_filepath=catalog_filepath, timestamp_col=timestamp_col,
-            shapefilepath=w.shapefilepath, id_col=id_col, run_folderpath=run_folderpath,
-            startdate=w.startdate, enddate=w.enddate, bands=bands, mosaic_days=mosaic_days,
-            csv_filepath=window_csv, label_col=label_col, mosaic_scheme=mosaic_scheme,
-            overwrite_setup_csv=overwrite_setup_csv, collection=collection,
-            properties_filter=properties_filter, processing=processing,
-        )
+        try:
+            _prepare_input_csv(
+                catalog_filepath=catalog_filepath, timestamp_col=timestamp_col,
+                shapefilepath=w.shapefilepath, id_col=id_col, run_folderpath=run_folderpath,
+                startdate=w.startdate, enddate=w.enddate, bands=bands,
+                mosaic_days=mosaic_days, csv_filepath=window_csv, label_col=label_col,
+                mosaic_scheme=mosaic_scheme, overwrite_setup_csv=overwrite_setup_csv,
+                collection=collection, properties_filter=properties_filter,
+                processing=processing,
+            )
+        except NoWorkUnitsError:
+            _record_known_empty(run_folderpath, segment, w.ids)
+            print(f"[setup] window {w.startdate} -> {w.enddate}: no polygon has tiles in "
+                  "range/overlap -- recorded known-empty", flush=True)
+            continue
         if not fs.exists(window_csv):
             continue
         with fs.open(window_csv, "r") as f:

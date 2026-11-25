@@ -921,19 +921,28 @@ def create_training_data(
         # STAC-backed plan only fires on the empty case, so this costs nothing in the
         # normal path. Only meaningful when NOT auto-downloading.
         if catalog_present and len(gdf) and not gdf.geometry.isna().any():
-            for w_start, w_end, w_gdf in (
+            checks = (
                 [(w.startdate, w.enddate, gdf[gdf[id_col].astype(str).isin(w.ids)])
                  for w in window_units] or [(startdate, enddate, gdf)]
-            ):
+            )
+            uncovered = []
+            for w_start, w_end, w_gdf in checks:
                 try:
                     covered = TileCatalog(catalog_filepath).filter(w_gdf, w_start, w_end)
                 except Exception:  # noqa: BLE001 - a bad filter just means "skip the coverage hint"
                     covered = None
                 if covered is not None and len(covered) == 0:
-                    catalog_errs.append(_imagery_missing_message(
+                    uncovered.append(_imagery_missing_message(
                         w_gdf, w_start, w_end, bands, catalog_filepath=catalog_filepath,
                         why="no catalog tiles intersect the label polygons in-window",
                     ))
+            # A window with no imagery is recorded known-empty by the build leg; only a
+            # request with no imagery anywhere is a preflight failure.
+            if len(uncovered) == len(checks):
+                catalog_errs += uncovered
+            else:
+                for message in uncovered:
+                    print(f"[plan] {message}", flush=True)
     _raise_preflight(catalog_errs)
 
     if download:

@@ -210,6 +210,28 @@ def test_a_polygon_that_changes_window_moves_only_its_own_cube(tmp_path, monkeyp
     assert sorted(merged["id"]) == ["p18", "p19"]
 
 
+@pytest.mark.parametrize("path", ["coverage_hint", "download", "overwrite_datacubes"])
+def test_a_window_with_no_imagery_does_not_stop_the_other(tmp_path, monkeypatch, path):
+    cat = _archive(tmp_path, monkeypatch)
+    monkeypatch.setattr(runners, "run_local", lambda csv, **kw: _run_rows(csv, []))
+    monkeypatch.setattr(api, "_download_verb", lambda **kw: None)
+    kw = {"download": True, "max_tiles": 5} if path == "download" else {}
+    if path == "overwrite_datacubes":
+        kw["overwrite"] = "datacubes"
+    polys = _polys([("p18", *Y18), ("none", "2015-01-01", "2016-01-01")])
+
+    td = _call(tmp_path, polys, catalog_filepath=cat, **kw)
+
+    assert set(td.load()["ids"]) == {"p18"}
+
+
+def test_a_request_with_no_imagery_in_any_window_raises(tmp_path, monkeypatch):
+    cat = _archive(tmp_path, monkeypatch)
+    polys = _polys([("a", "2015-01-01", "2016-01-01"), ("b", "2016-01-01", "2017-01-01")])
+    with pytest.raises(PreflightError, match="no catalog tiles intersect"):
+        _call(tmp_path, polys, catalog_filepath=cat)
+
+
 def test_zero_padded_ids_are_not_dropped_by_the_per_window_csv_read(tmp_path, monkeypatch):
     cat = _archive(tmp_path, monkeypatch)
     monkeypatch.setattr(runners, "run_local", lambda csv, **kw: _run_rows(csv, []))
