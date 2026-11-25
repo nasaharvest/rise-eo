@@ -143,9 +143,13 @@ Important invariants are **an absence of something** — that is what makes them
 
 **Conventions that go with them:** raster ops take and return `(data, profile)` so they chain;
 band math uses the 5-D contract `(samples, timestamps, height, width, bands)` plus a `band_indices`
-dict; nodata is 0; cubes over one start/end/`mosaic_days` share an identical `timestamps` axis
-(`T = ceil((end-start)/mosaic_days)`, or the number of month starts in `[start, end)` for
-`mosaic_days="month"`), which `flatten` requires. A cube lives at
+dict; nodata is 0; the number of timestamps is `T = ceil((end-start)/mosaic_days)`, or the number of
+month starts in `[start, end)` for `mosaic_days="month"`. Cubes over one start/end/`mosaic_days` share an
+identical `timestamps` axis. `flatten` requires the same T and bands, not the same dates: with per-polygon
+windows (`create_training_data(startdate=None, enddate=None)`, dates read from the polygons' columns) it
+writes `window_starts.npy`, one UTC window start per sample, in the order of `ids.npy`. The same-T check runs
+before any download; each distinct window is downloaded and built on its own and all cubes go to the runner
+in one dispatch. A cube lives at
 `{run}/{collection code}_{start}-{end}_{period}_{hash8}/{id}/` (`s2l2a_20180101-20190101_P1M_ab12cd34`):
 the code is the collection's `SHORT_NAME`, the period is `P1M` or `P<n>D`, the hash digests every parameter
 and the segment's `params.json` writes them out.
