@@ -242,6 +242,17 @@ def test_a_repeat_call_with_an_all_known_empty_window_short_circuits(tmp_path, m
     assert "CURRENT" in capsys.readouterr().out and dispatched == []
 
 
+def test_load_of_a_set_without_window_starts_says_how_to_fix_it(tmp_path):
+    export = tmp_path / "export"
+    export.mkdir()
+    for name in ("data", "ids", "coords"):
+        fs.save_npy(str(export / f"{name}.npy"), np.zeros(1))
+    fs.save_npy(str(export / "metadata.pickle.npy"), {"bands": ["B04"]}, allow_pickle=True)
+    td = api.TrainingData(str(export), str(tmp_path), 1, 1, ["B04"])
+    with pytest.raises(FileNotFoundError, match="Re-run create_training_data"):
+        td.load()
+
+
 def test_a_request_with_no_imagery_in_any_window_raises(tmp_path, monkeypatch):
     cat = _archive(tmp_path, monkeypatch)
     polys = _polys([("a", "2015-01-01", "2016-01-01"), ("b", "2016-01-01", "2017-01-01")])

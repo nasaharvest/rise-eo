@@ -441,6 +441,16 @@ class TrainingData:
     bands: list[str]
     feature_bands: list[str] | None = None   # set when a feature transform was applied
 
+    def _load_window_starts(self):
+        path = os.path.join(self.export_folderpath, "window_starts.npy")
+        if not fs.exists(path):
+            raise FileNotFoundError(
+                f"{path} is missing: this training set was written before window_starts.npy "
+                "existed. Re-run create_training_data (or flatten_training_data with "
+                "overwrite=True) to write it."
+            )
+        return fs.load_npy(path)
+
     def load(self) -> dict:
         """Load the arrays into memory: data/ids/window_starts/coords/metadata (+ labels if present).
 
@@ -450,7 +460,7 @@ class TrainingData:
         out = {
             "data": fs.load_npy(os.path.join(self.export_folderpath, "data.npy")),
             "ids": fs.load_npy(os.path.join(self.export_folderpath, "ids.npy")),
-            "window_starts": fs.load_npy(os.path.join(self.export_folderpath, "window_starts.npy")),
+            "window_starts": self._load_window_starts(),
             "coords": fs.load_npy(os.path.join(self.export_folderpath, "coords.npy")),
             "metadata": fs.load_npy(
                 os.path.join(self.export_folderpath, TRAINING_METADATA_NAME), allow_pickle=True
