@@ -535,11 +535,11 @@ def _check_inputs(inputs, passed: Sequence[str]) -> list[str]:
     if passed:
         errs.append(f"inputs= replaces {list(passed)}: do not pass them alongside inputs=; "
                     "per-collection options go on each CollectionInput.")
-    seen: dict[str, str] = {}
+    seen: set[str] = set()
     for i in inputs:
         if i.collection in seen:
             errs.append(f"collection {i.collection!r} appears more than once in inputs.")
-        seen[i.collection] = i.collection
+        seen.add(i.collection)
     owner: dict[str, str] = {}
     for i in inputs:
         if not i.bands:

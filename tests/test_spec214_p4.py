@@ -207,8 +207,6 @@ def test_one_input_trains_exactly_as_the_scalar_arguments(tmp_path, monkeypatch)
 
 
 def test_download_leg_gets_the_inputs_arguments(tmp_path, monkeypatch):
-    import test_spec214_p3 as p3
-
     class Stop(Exception):
         pass
 
@@ -234,7 +232,6 @@ def test_download_leg_gets_the_inputs_arguments(tmp_path, monkeypatch):
             "sentinel-1-rtc", ["vv", "vh"], {"sat:orbit_state": "descending"})
         assert call["dst_folderpath"] == str(tmp_path / "arch")
         assert (call["runner"], call["processing"]) == (runner, "latest")
-    del p3
 
 
 def test_training_with_two_inputs_is_not_supported_yet(tmp_path):
