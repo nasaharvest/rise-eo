@@ -24,8 +24,8 @@ decision changes direction. One decision is new: D10, from the maintainer's #147
 - D8: states how paths are recorded;
 - the ACs now match the phases, and the S2 band count is worded consistently.
 
-**Amendment A2 (2026-11-25, from checking D5/D6 against the code before P5): waits on the
-maintainer's sign-off.** The three answers below are the maintainer's (2026-11-25). No signed-off
+**Amendment A2 (2026-11-25, from checking D5/D6 against the code before P5): SIGNED OFF (user,
+2026-11-25).** The three answers below are the maintainer's (2026-11-25). No signed-off
 decision changes direction. A2:
 - D5 step 2: a component built onto the reference grid is read with the shape buffered by two
   reference pixels, then blanked outside the shape as rasterized on the reference grid, so its
