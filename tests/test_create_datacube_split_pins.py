@@ -311,44 +311,44 @@ def test_walk_call_order(tmp_path, monkeypatch):
 
 EXPECTED: dict = {
     'setup_fresh_label': ('shapefilepath,startdate,enddate,catalog_filepath,export_folderpath,datacube_filepath,images_count,declaration_filepath,id,label,added_on,mosaic_days,mosaic_scheme,collection,bands,properties_filter,processing\n'
- '<tmp>/run/20180101_20190101_m20_d08b053c/0/geometry.geojson,2018-01-01 '
+ '<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/0/geometry.geojson,2018-01-01 '
  '00:00:00+00:00,2019-01-01 '
- '00:00:00+00:00,<tmp>/run/20180101_20190101_m20_d08b053c/0/catalog.parquet,<tmp>/run/20180101_20190101_m20_d08b053c/0,<tmp>/run/20180101_20190101_m20_d08b053c/0/datacube.npy,2,<tmp>/run/20180101_20190101_m20_d08b053c/declaration.json,0,l0,2030-01-01 '
+ '00:00:00+00:00,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/0/catalog.parquet,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/0,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/0/datacube.npy,2,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/declaration.json,0,l0,2030-01-01 '
  '00:01:00+00:00,20,calendar,sentinel-2-l2a,B04,,\n'
- '<tmp>/run/20180101_20190101_m20_d08b053c/1/geometry.geojson,2018-01-01 '
+ '<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/1/geometry.geojson,2018-01-01 '
  '00:00:00+00:00,2019-01-01 '
- '00:00:00+00:00,<tmp>/run/20180101_20190101_m20_d08b053c/1/catalog.parquet,<tmp>/run/20180101_20190101_m20_d08b053c/1,<tmp>/run/20180101_20190101_m20_d08b053c/1/datacube.npy,2,<tmp>/run/20180101_20190101_m20_d08b053c/declaration.json,1,l1,2030-01-01 '
+ '00:00:00+00:00,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/1/catalog.parquet,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/1,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/1/datacube.npy,2,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/declaration.json,1,l1,2030-01-01 '
  '00:01:00+00:00,20,calendar,sentinel-2-l2a,B04,,\n'),
     'setup_fresh_nolabel': ('shapefilepath,startdate,enddate,catalog_filepath,export_folderpath,datacube_filepath,images_count,declaration_filepath,id,added_on,mosaic_days,mosaic_scheme,collection,bands,properties_filter,processing\n'
- '<tmp>/run/20180101_20190101_m20_d08b053c/0/geometry.geojson,2018-01-01 '
+ '<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/0/geometry.geojson,2018-01-01 '
  '00:00:00+00:00,2019-01-01 '
- '00:00:00+00:00,<tmp>/run/20180101_20190101_m20_d08b053c/0/catalog.parquet,<tmp>/run/20180101_20190101_m20_d08b053c/0,<tmp>/run/20180101_20190101_m20_d08b053c/0/datacube.npy,2,<tmp>/run/20180101_20190101_m20_d08b053c/declaration.json,0,2030-01-01 '
+ '00:00:00+00:00,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/0/catalog.parquet,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/0,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/0/datacube.npy,2,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/declaration.json,0,2030-01-01 '
  '00:01:00+00:00,20,calendar,sentinel-2-l2a,B04,,\n'
- '<tmp>/run/20180101_20190101_m20_d08b053c/1/geometry.geojson,2018-01-01 '
+ '<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/1/geometry.geojson,2018-01-01 '
  '00:00:00+00:00,2019-01-01 '
- '00:00:00+00:00,<tmp>/run/20180101_20190101_m20_d08b053c/1/catalog.parquet,<tmp>/run/20180101_20190101_m20_d08b053c/1,<tmp>/run/20180101_20190101_m20_d08b053c/1/datacube.npy,2,<tmp>/run/20180101_20190101_m20_d08b053c/declaration.json,1,2030-01-01 '
+ '00:00:00+00:00,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/1/catalog.parquet,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/1,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/1/datacube.npy,2,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/declaration.json,1,2030-01-01 '
  '00:01:00+00:00,20,calendar,sentinel-2-l2a,B04,,\n'),
     'setup_fresh_filter_processing': ('shapefilepath,startdate,enddate,catalog_filepath,export_folderpath,datacube_filepath,images_count,declaration_filepath,id,label,added_on,mosaic_days,mosaic_scheme,collection,bands,properties_filter,processing\n'
- '<tmp>/run/20180101_20190101_m20_14cd6212/0/geometry.geojson,2018-01-01 '
+ '<tmp>/run/s2l2a_20180101-20190101_P20D_765826da/0/geometry.geojson,2018-01-01 '
  '00:00:00+00:00,2019-01-01 '
- '00:00:00+00:00,<tmp>/run/20180101_20190101_m20_14cd6212/0/catalog.parquet,<tmp>/run/20180101_20190101_m20_14cd6212/0,<tmp>/run/20180101_20190101_m20_14cd6212/0/datacube.npy,2,<tmp>/run/20180101_20190101_m20_14cd6212/declaration.json,0,l0,2030-01-01 '
+ '00:00:00+00:00,<tmp>/run/s2l2a_20180101-20190101_P20D_765826da/0/catalog.parquet,<tmp>/run/s2l2a_20180101-20190101_P20D_765826da/0,<tmp>/run/s2l2a_20180101-20190101_P20D_765826da/0/datacube.npy,2,<tmp>/run/s2l2a_20180101-20190101_P20D_765826da/declaration.json,0,l0,2030-01-01 '
  '00:01:00+00:00,20,calendar,sentinel-2-l2a,B04,s2:foo=bar;source=mpc,latest\n'
- '<tmp>/run/20180101_20190101_m20_14cd6212/1/geometry.geojson,2018-01-01 '
+ '<tmp>/run/s2l2a_20180101-20190101_P20D_765826da/1/geometry.geojson,2018-01-01 '
  '00:00:00+00:00,2019-01-01 '
- '00:00:00+00:00,<tmp>/run/20180101_20190101_m20_14cd6212/1/catalog.parquet,<tmp>/run/20180101_20190101_m20_14cd6212/1,<tmp>/run/20180101_20190101_m20_14cd6212/1/datacube.npy,2,<tmp>/run/20180101_20190101_m20_14cd6212/declaration.json,1,l1,2030-01-01 '
+ '00:00:00+00:00,<tmp>/run/s2l2a_20180101-20190101_P20D_765826da/1/catalog.parquet,<tmp>/run/s2l2a_20180101-20190101_P20D_765826da/1,<tmp>/run/s2l2a_20180101-20190101_P20D_765826da/1/datacube.npy,2,<tmp>/run/s2l2a_20180101-20190101_P20D_765826da/declaration.json,1,l1,2030-01-01 '
  '00:01:00+00:00,20,calendar,sentinel-2-l2a,B04,s2:foo=bar;source=mpc,latest\n'),
     'setup_existing_csv': ('shapefilepath,startdate,enddate,catalog_filepath,export_folderpath,datacube_filepath,images_count,declaration_filepath,id,label,added_on,mosaic_days,mosaic_scheme,collection,bands,properties_filter,processing\n'
- '<tmp>/run/20180101_20190101_m20_d08b053c/1/geometry.geojson,2018-01-01 '
+ '<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/1/geometry.geojson,2018-01-01 '
  '00:00:00+00:00,2019-01-01 '
- '00:00:00+00:00,<tmp>/run/20180101_20190101_m20_d08b053c/1/catalog.parquet,<tmp>/run/20180101_20190101_m20_d08b053c/1,<tmp>/run/20180101_20190101_m20_d08b053c/1/datacube.npy,2,<tmp>/run/20180101_20190101_m20_d08b053c/declaration.json,1,l1,2030-01-01 '
+ '00:00:00+00:00,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/1/catalog.parquet,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/1,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/1/datacube.npy,2,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/declaration.json,1,l1,2030-01-01 '
  '00:01:00+00:00,20,calendar,sentinel-2-l2a,B04,,\n'
- '<tmp>/run/20180201_20190201_m20_d08b053c/2/geometry.geojson,2018-02-01 '
+ '<tmp>/run/s2l2a_20180201-20190201_P20D_5f8d18ac/2/geometry.geojson,2018-02-01 '
  '00:00:00+00:00,2019-02-01 '
- '00:00:00+00:00,<tmp>/run/20180201_20190201_m20_d08b053c/2/catalog.parquet,<tmp>/run/20180201_20190201_m20_d08b053c/2,<tmp>/run/20180201_20190201_m20_d08b053c/2/datacube.npy,2,<tmp>/run/20180201_20190201_m20_d08b053c/declaration.json,2,l2,2030-01-01 '
+ '00:00:00+00:00,<tmp>/run/s2l2a_20180201-20190201_P20D_5f8d18ac/2/catalog.parquet,<tmp>/run/s2l2a_20180201-20190201_P20D_5f8d18ac/2,<tmp>/run/s2l2a_20180201-20190201_P20D_5f8d18ac/2/datacube.npy,2,<tmp>/run/s2l2a_20180201-20190201_P20D_5f8d18ac/declaration.json,2,l2,2030-01-01 '
  '00:02:00+00:00,20,calendar,sentinel-2-l2a,B04,,\n'
- '<tmp>/run/20180101_20190101_m20_d08b053c/0/geometry.geojson,2018-01-01 '
+ '<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/0/geometry.geojson,2018-01-01 '
  '00:00:00+00:00,2019-01-01 '
- '00:00:00+00:00,<tmp>/run/20180101_20190101_m20_d08b053c/0/catalog.parquet,<tmp>/run/20180101_20190101_m20_d08b053c/0,<tmp>/run/20180101_20190101_m20_d08b053c/0/datacube.npy,2,<tmp>/run/20180101_20190101_m20_d08b053c/declaration.json,0,l0,2030-01-01 '
+ '00:00:00+00:00,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/0/catalog.parquet,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/0,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/0/datacube.npy,2,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/declaration.json,0,l0,2030-01-01 '
  '00:03:00+00:00,20,calendar,sentinel-2-l2a,B04,,\n'),
     'setup_duplicate_ids': ("shapes have duplicate 'id' values: 2 of 3 ids repeated across 6 shapes (worst: bx3, ax2). "
  'Each id becomes one export folder, so duplicates make multiple work-units write the same '
@@ -358,24 +358,24 @@ EXPECTED: dict = {
     'walk_no_csv': ((0, 2, 0),
  ['[plan]   build: 0 present, 2 missing, 0 known-empty -> will build 2'],
  'shapefilepath,startdate,enddate,catalog_filepath,export_folderpath,datacube_filepath,images_count,declaration_filepath,id,label,added_on,mosaic_days,mosaic_scheme,collection,bands,properties_filter,processing\n'
- '<tmp>/run/20180101_20190101_m20_d08b053c/0/geometry.geojson,2018-01-01 '
+ '<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/0/geometry.geojson,2018-01-01 '
  '00:00:00+00:00,2019-01-01 '
- '00:00:00+00:00,<tmp>/run/20180101_20190101_m20_d08b053c/0/catalog.parquet,<tmp>/run/20180101_20190101_m20_d08b053c/0,<tmp>/run/20180101_20190101_m20_d08b053c/0/datacube.npy,2,<tmp>/run/20180101_20190101_m20_d08b053c/declaration.json,0,l0,2030-01-01 '
+ '00:00:00+00:00,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/0/catalog.parquet,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/0,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/0/datacube.npy,2,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/declaration.json,0,l0,2030-01-01 '
  '00:01:00+00:00,20,calendar,sentinel-2-l2a,B04,,\n'
- '<tmp>/run/20180101_20190101_m20_d08b053c/1/geometry.geojson,2018-01-01 '
+ '<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/1/geometry.geojson,2018-01-01 '
  '00:00:00+00:00,2019-01-01 '
- '00:00:00+00:00,<tmp>/run/20180101_20190101_m20_d08b053c/1/catalog.parquet,<tmp>/run/20180101_20190101_m20_d08b053c/1,<tmp>/run/20180101_20190101_m20_d08b053c/1/datacube.npy,2,<tmp>/run/20180101_20190101_m20_d08b053c/declaration.json,1,l1,2030-01-01 '
+ '00:00:00+00:00,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/1/catalog.parquet,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/1,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/1/datacube.npy,2,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/declaration.json,1,l1,2030-01-01 '
  '00:01:00+00:00,20,calendar,sentinel-2-l2a,B04,,\n'),
     'walk_header_only': ((0, 2, 0),
  ['[plan]   build: 0 present, 2 missing, 0 known-empty -> will build 2'],
  'id,startdate,shapefilepath,enddate,catalog_filepath,export_folderpath,datacube_filepath,images_count,declaration_filepath,label,added_on,mosaic_days,mosaic_scheme,collection,bands,properties_filter,processing\n'
  '0,2018-01-01 '
- '00:00:00+00:00,<tmp>/run/20180101_20190101_m20_d08b053c/0/geometry.geojson,2019-01-01 '
- '00:00:00+00:00,<tmp>/run/20180101_20190101_m20_d08b053c/0/catalog.parquet,<tmp>/run/20180101_20190101_m20_d08b053c/0,<tmp>/run/20180101_20190101_m20_d08b053c/0/datacube.npy,2.0,<tmp>/run/20180101_20190101_m20_d08b053c/declaration.json,l0,2030-01-01 '
+ '00:00:00+00:00,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/0/geometry.geojson,2019-01-01 '
+ '00:00:00+00:00,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/0/catalog.parquet,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/0,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/0/datacube.npy,2.0,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/declaration.json,l0,2030-01-01 '
  '00:01:00+00:00,20.0,calendar,sentinel-2-l2a,B04,,\n'
  '1,2018-01-01 '
- '00:00:00+00:00,<tmp>/run/20180101_20190101_m20_d08b053c/1/geometry.geojson,2019-01-01 '
- '00:00:00+00:00,<tmp>/run/20180101_20190101_m20_d08b053c/1/catalog.parquet,<tmp>/run/20180101_20190101_m20_d08b053c/1,<tmp>/run/20180101_20190101_m20_d08b053c/1/datacube.npy,2.0,<tmp>/run/20180101_20190101_m20_d08b053c/declaration.json,l1,2030-01-01 '
+ '00:00:00+00:00,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/1/geometry.geojson,2019-01-01 '
+ '00:00:00+00:00,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/1/catalog.parquet,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/1,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/1/datacube.npy,2.0,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/declaration.json,l1,2030-01-01 '
  '00:01:00+00:00,20.0,calendar,sentinel-2-l2a,B04,,\n'),
     'walk_other_window_only': ((0, 0, 1),
  ['[plan]   build: 0 present, 0 missing, 1 known-empty -> will build 0'],
@@ -383,13 +383,13 @@ EXPECTED: dict = {
     'walk_row_no_cube': ((2, 0, 0),
  ['[plan]   build: 0 present, 2 missing, 0 known-empty -> will build 2'],
  'shapefilepath,startdate,enddate,catalog_filepath,export_folderpath,datacube_filepath,images_count,declaration_filepath,id,label,added_on,mosaic_days,mosaic_scheme,collection,bands,properties_filter,processing\n'
- '<tmp>/run/20180101_20190101_m20_d08b053c/0/geometry.geojson,2018-01-01 '
+ '<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/0/geometry.geojson,2018-01-01 '
  '00:00:00+00:00,2019-01-01 '
- '00:00:00+00:00,<tmp>/run/20180101_20190101_m20_d08b053c/0/catalog.parquet,<tmp>/run/20180101_20190101_m20_d08b053c/0,<tmp>/run/20180101_20190101_m20_d08b053c/0/datacube.npy,2,<tmp>/run/20180101_20190101_m20_d08b053c/declaration.json,0,l0,2030-01-01 '
+ '00:00:00+00:00,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/0/catalog.parquet,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/0,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/0/datacube.npy,2,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/declaration.json,0,l0,2030-01-01 '
  '00:01:00+00:00,20,calendar,sentinel-2-l2a,B04,,\n'
- '<tmp>/run/20180101_20190101_m20_d08b053c/1/geometry.geojson,2018-01-01 '
+ '<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/1/geometry.geojson,2018-01-01 '
  '00:00:00+00:00,2019-01-01 '
- '00:00:00+00:00,<tmp>/run/20180101_20190101_m20_d08b053c/1/catalog.parquet,<tmp>/run/20180101_20190101_m20_d08b053c/1,<tmp>/run/20180101_20190101_m20_d08b053c/1/datacube.npy,2,<tmp>/run/20180101_20190101_m20_d08b053c/declaration.json,1,l1,2030-01-01 '
+ '00:00:00+00:00,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/1/catalog.parquet,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/1,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/1/datacube.npy,2,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/declaration.json,1,l1,2030-01-01 '
  '00:01:00+00:00,20,calendar,sentinel-2-l2a,B04,,\n'),
     'walk_known_empty': ((0, 2, 0),
  ['[plan]   build: 0 present, 2 missing, 0 known-empty -> will build 2',
@@ -397,16 +397,16 @@ EXPECTED: dict = {
  (1, 0, 1),
  ['[plan]   build: 0 present, 1 missing, 1 known-empty -> will build 1'],
  'shapefilepath,startdate,enddate,catalog_filepath,export_folderpath,datacube_filepath,images_count,declaration_filepath,id,label,added_on,mosaic_days,mosaic_scheme,collection,bands,properties_filter,processing\n'
- '<tmp>/run/20180101_20190101_m20_d08b053c/0/geometry.geojson,2018-01-01 '
+ '<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/0/geometry.geojson,2018-01-01 '
  '00:00:00+00:00,2019-01-01 '
- '00:00:00+00:00,<tmp>/run/20180101_20190101_m20_d08b053c/0/catalog.parquet,<tmp>/run/20180101_20190101_m20_d08b053c/0,<tmp>/run/20180101_20190101_m20_d08b053c/0/datacube.npy,2,<tmp>/run/20180101_20190101_m20_d08b053c/declaration.json,0,l0,2030-01-01 '
+ '00:00:00+00:00,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/0/catalog.parquet,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/0,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/0/datacube.npy,2,<tmp>/run/s2l2a_20180101-20190101_P20D_0b8100d2/declaration.json,0,l0,2030-01-01 '
  '00:01:00+00:00,20,calendar,sentinel-2-l2a,B04,,\n',
- '{\n  "20180101_20190101_m20_d08b053c": {\n    "ids": [\n      "9"\n    ]\n  }\n}'),
+ '{\n  "s2l2a_20180101-20190101_P20D_0b8100d2": {\n    "ids": [\n      "9"\n    ]\n  }\n}'),
     'walk_all_out_of_coverage': ((0, 2, 0),
  ['[plan]   build: 0 present, 2 missing, 0 known-empty -> will build 2',
   '[setup] shortfall of 2 had no tiles in range/overlap -- recorded known-empty'],
  None,
- '{\n  "20180101_20190101_m20_d08b053c": {\n    "ids": [\n      "8",\n      "9"\n    ]\n  }\n}'),
+ '{\n  "s2l2a_20180101-20190101_P20D_0b8100d2": {\n    "ids": [\n      "8",\n      "9"\n    ]\n  }\n}'),
     'walk_call_order': ((2, 1, 0),
  [('open', 'r'),
   'presence',
@@ -417,3 +417,18 @@ EXPECTED: dict = {
   ('open', 'w'),
   ('open', 'r')]),
 }
+
+
+def test_params_json_round_trips_a_non_empty_properties_filter_and_processing(tmp_path):
+    import json
+
+    shapes = _env(tmp_path)
+    csv = _setup(tmp_path, shapes, properties_filter={"s2:foo": "bar", "source": ["mpc"]},
+                 processing="latest")
+    export = str(pd.read_csv(csv).iloc[0]["export_folderpath"])
+    segment = os.path.basename(os.path.dirname(export))
+    params = json.loads((tmp_path / "run" / segment / "params.json").read_text())
+    assert params["properties_filter"] == {"s2:foo": ["bar"], "source": ["mpc"]}
+    assert params["processing"] == "latest"
+    assert params["bands"] == ["B04"] and params["mosaic_days"] == 20
+    assert params["collection"] == "sentinel-2-l2a" and params["mosaic_scheme"] == "calendar"

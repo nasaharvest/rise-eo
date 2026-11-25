@@ -4,7 +4,7 @@ Instructions for AI coding agents in this repo. People: start with `CONTRIBUTING
 
 ## What rise-eo is
 
-`rise-eo` downloads Sentinel-2 L2A imagery, builds datacubes and flattens them into training data. Its verbs
+`rise-eo` downloads Sentinel-2 L2A and Sentinel-1 RTC imagery, builds datacubes and flattens them into training data. Its verbs
 are `rise_eo.download`, `create_training_data`, `flatten_training_data`, `verify_adapter`, `run_inference`
 and `deploy` (all in `rise_eo/api.py`). It runs locally or on
 Azure ML, with no cloud lock-in. Users train their own models; rise-eo does not. The plan is in
@@ -81,8 +81,8 @@ A PR merges when it passes four gates (details in `CONTRIBUTING.md`):
   `{band_name: index}`.
 - **The catalog is GeoParquet** (`TileCatalog`); STAC is an extra export. A datacube is `datacube.npy` +
   `metadata.pickle.npy`. Nodata is 0.
-- **Calendar-interval mosaics are the default.** Cubes with the same start, end and `mosaic_days` share
-  the same `timestamps` axis; `flatten` needs that.
+- **Calendar-interval mosaics are the only kind.** `mosaic_days` is an `int` or `"month"`. Cubes with the
+  same start, end and `mosaic_days` share the same `timestamps` axis; `flatten` needs that.
 - **No compatibility shims for old archive layouts.** Old artifacts raise an error that says how to fix
   them. On-disk format versions keep their lists of supported versions.
 - **A test that reads a Markdown file lives in `tests/test_docs.py` or `tests/test_notebooks.py`.** A

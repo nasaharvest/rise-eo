@@ -286,7 +286,7 @@ def build_datacube(
     enddate: datetime.datetime,
     bands: list[str],
     *,
-    mosaic_days: int = config.MOSAIC_DAYS,
+    mosaic_days: int | str = config.MOSAIC_DAYS,
     reference_band: str | None = None,
     declaration: CollectionDeclaration | None = None,
     properties_filter: Mapping[str, str | Sequence[str]] | None = None,
@@ -337,10 +337,9 @@ def build_datacube(
     declaration's `nodata` (NOT `config.NODATA`) when the column is absent.
 
     `startdate` must be on/before the first acquisition and `enddate` on/after the last
-    (median_mosaic requirement). `mosaic_scheme="calendar"` (default) uses fixed windows
+    (median_mosaic requirement). `mosaic_scheme` accepts only `"calendar"`: fixed windows
     off `startdate`, so cubes over the same startdate/enddate/mosaic_days share an
-    identical `timestamps` axis; `"acquisition"` windows track the actual acquisition
-    dates.
+    identical `timestamps` axis.
 
     `write_timings=True` writes a `timings.json` sidecar (per-phase seconds + counts).
     `write_read_log=True` writes a `reads.jsonl` sidecar (one row per windowed read: grid
@@ -351,6 +350,8 @@ def build_datacube(
 
     Spec: 03, 58.
     """
+    ops.check_mosaic_scheme(mosaic_scheme)
+    ops.check_mosaic_days(mosaic_days, startdate)
     declared = _resolve_build_declaration(catalog_subset, declaration)
     # The filter is applied HERE as well as upstream where the catalog is queried
     # (`workflows.create_datacube.setup`) -- applying it twice is idempotent, and a

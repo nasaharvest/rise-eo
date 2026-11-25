@@ -45,6 +45,14 @@ The *product* being fetched, named by its STAC collection id — `"sentinel-2-l2
 sources.
 _Avoid_: satellite (S1 GRD and S1 RTC are the same satellite; HLS is two), product, dataset.
 
+**Short name** (`SHORT_NAME`):
+The `[a-z0-9]+` code a collection carries in a cube path (`s2l2a`, `s1rtc`); `register(short_name=)` sets it,
+else it is the collection id with every character outside `[a-z0-9]` removed. Two collections never share one.
+
+**Period code**:
+The ISO 8601 duration in a cube path: `P1M` for `mosaic_days="month"`, `P<n>D` for an `int`.
+_Avoid_: `m20`, mosaic length.
+
 **Collection declaration** (`CollectionDeclaration`):
 The collection-level facts the datacube builder needs — reference band, mask spec, nodata, mosaic
 method — registered per collection id and stamped into the catalog so an artifact self-describes.

@@ -456,7 +456,7 @@ def test_build_shortfall_only_calls_setup_for_missing_ids_only(tmp_path, monkeyp
 
 _FORWARDED = dict(
     collection="fwd-coll", properties_filter={"s2:foo": "bar"}, processing="latest",
-    mosaic_scheme="acquisition",
+    mosaic_scheme="calendar",
 )
 
 

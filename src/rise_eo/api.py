@@ -39,6 +39,7 @@ from rise_eo.catalog import stac as _stac
 from rise_eo.catalog.catalog import TileCatalog
 from rise_eo.catalog.catalog import filter_gdf as _filter_gdf
 from rise_eo.datacube import flatten as _flatten
+from rise_eo.datacube import ops as _ops
 from rise_eo.datacube.files import CUBE_METADATA_NAME, CUBE_NAME, TRAINING_METADATA_NAME
 from rise_eo.model import bundle as _bundle
 from rise_eo.model import engine as _engine
@@ -109,15 +110,19 @@ def archive_catalog_filepath(dst_folderpath: str, collection: str) -> str:
 
 
 def compute_n_timestamps(
-    startdate: datetime.datetime, enddate: datetime.datetime, mosaic_days: int
+    startdate: datetime.datetime, enddate: datetime.datetime, mosaic_days: int | str
 ) -> int:
-    """`T` for a calendar-mosaic build: ceil((enddate - startdate) / mosaic_days).
+    """`T` for a calendar-mosaic build: ceil((enddate - startdate) / mosaic_days), or for
+    `mosaic_days="month"` the number of month starts in `[startdate, enddate)`.
 
     Pure function of the caller's window — computable with no catalog and no download,
     which is what lets preflight check `T` against a model's `n_timestamps`.
     """
     start = pd.to_datetime(startdate, utc=True)
     end = pd.to_datetime(enddate, utc=True)
+    mosaic_days = _ops.check_mosaic_days(mosaic_days, start)
+    if mosaic_days == _ops.MONTH:
+        return len(_ops.mosaic_windows(start, end, mosaic_days))
     total_days = (end - start) / pd.Timedelta(days=1)
     return math.ceil(total_days / mosaic_days)
 
@@ -170,11 +175,16 @@ def _check_window(startdate, enddate, mosaic_days, bands) -> list[str]:
     end = pd.to_datetime(enddate, utc=True)
     if not (start < end):
         errs.append(f"startdate ({start}) must be before enddate ({end}).")
-    if mosaic_days < 1:
-        errs.append(f"mosaic_days ({mosaic_days}) must be >= 1.")
+    try:
+        mosaic_days = _ops.check_mosaic_days(mosaic_days, start)
+        if mosaic_days != _ops.MONTH and mosaic_days < 1:
+            raise ValueError(f"mosaic_days ({mosaic_days}) must be >= 1.")
+    except ValueError as exc:
+        errs.append(str(exc))
+        mosaic_days = None
     if not bands:
         errs.append("bands must be a non-empty list.")
-    if start < end and mosaic_days >= 1 and compute_n_timestamps(start, end, mosaic_days) < 1:
+    if start < end and mosaic_days is not None and compute_n_timestamps(start, end, mosaic_days) < 1:
         errs.append("date window yields T < 1 timestamps.")
     return errs
 
@@ -564,7 +574,7 @@ def create_training_data(
     catalog_filepath: str,
     startdate: datetime.datetime,
     enddate: datetime.datetime,
-    mosaic_days: int,
+    mosaic_days: int | str,
     bands: list[str],
     id_col: str,
     export_folderpath: str,
@@ -936,7 +946,7 @@ def _flatten_identity(input_df: pd.DataFrame, *, id_col, filepath_col, adapter, 
 
 def _flatten_identity_from_request(
     gdf: gpd.GeoDataFrame, *, id_col: str, run_folderpath: str,
-    startdate, enddate, mosaic_days: int, bands: list[str],
+    startdate, enddate, mosaic_days: int | str, bands: list[str],
     collection: str, mosaic_scheme: str,
     adapter, feature_sequence, aggregate,
     properties_filter: Mapping[str, str | Sequence[str]] | None = None,
@@ -1599,7 +1609,7 @@ def run_inference(
     catalog_filepath: str | None = None,
     startdate: datetime.datetime | None = None,
     enddate: datetime.datetime | None = None,
-    mosaic_days: int | None = None,
+    mosaic_days: int | str | None = None,
     bands: list[str] | None = None,
     grid_size_km: float = 5,
     scale_fact: float = 1.1,
@@ -1918,9 +1928,19 @@ def _run_inference_roi(
         errs += _check_catalog_collection_dir(catalog_filepath, collection)
     # Normalize dates HERE, before `compute_n_timestamps` or any dispatch: an unparseable
     # date must abort on the driver in milliseconds, not after a 40-380 s node cold-start.
+    window_ok = False
     if startdate is not None and enddate is not None:
         startdate, enddate, date_errs = _normalize_window(startdate, enddate)
         errs += date_errs
+        window_ok = not date_errs
+    # A bad `mosaic_days` (or a monthly one whose `startdate` is not a month start) is a
+    # preflight error, raised before the bundle is staged or any file is written.
+    days_ok = False
+    if window_ok and mosaic_days is not None:
+        try:
+            days_ok = _ops.check_mosaic_days(mosaic_days, startdate) is not None
+        except ValueError as exc:
+            errs.append(str(exc))
     # Canonicalize bands and the adapter's required_bands to native asset keys before
     # comparing -- one may be spelled canonically ("nir08"), the other natively ("B8A"), and
     # both must resolve to the same set for this check to mean anything.
@@ -1932,7 +1952,7 @@ def _run_inference_roi(
         missing = required - set(bands)
         if missing:
             errs.append(f"bands is missing model-required {sorted(missing)}.")
-    if want_t and None not in (startdate, enddate, mosaic_days):
+    if want_t and days_ok:
         got_t = compute_n_timestamps(startdate, enddate, mosaic_days)
         if got_t != want_t:
             errs.append(
@@ -2130,7 +2150,7 @@ def verify_adapter(
     catalog_filepath: str,
     startdate: datetime.datetime,
     enddate: datetime.datetime,
-    mosaic_days: int,
+    mosaic_days: int | str,
     bands: list[str],
     export_folderpath: str,
     cell: str | None = None,
@@ -2306,7 +2326,7 @@ def verify_adapter(
     # --- resume by the REQUEST's identity, never mere existence -----------------------
     identity = {
         "roi": roi if isinstance(roi, str) else roi_gdf.to_json(default=str),
-        "startdate": str(startdate), "enddate": str(enddate), "mosaic_days": int(mosaic_days),
+        "startdate": str(startdate), "enddate": str(enddate), "mosaic_days": _ops.check_mosaic_days(mosaic_days),
         "bands": sorted(bands), "collection": collection,
         "properties_filter": _create_datacube._canonicalize_properties_filter(properties_filter),
         "grid_size_km": grid_size_km, "scale_fact": scale_fact, "cell": chosen_cell,

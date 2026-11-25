@@ -36,6 +36,7 @@ from rise_eo.catalog.catalog import (
     properties_filter_values,
 )
 from rise_eo.catalog.declaration import CollectionDeclaration
+from rise_eo.datacube import ops
 from rise_eo.datacube.files import CUBE_METADATA_NAME, CUBE_NAME
 from rise_eo.storage import fs
 from rise_eo.workflows import runners
@@ -53,6 +54,7 @@ _UNIT_IDENTITY_COLS = (
 )
 
 DECLARATION_FILENAME = "declaration.json"
+PARAMS_FILENAME = "params.json"
 
 
 def _canonicalize_processing(processing: str | None) -> str:
@@ -135,6 +137,7 @@ def params_key(
 
     Spec: 58 D4, D9.3; 59 D6.
     """
+    ops.check_mosaic_scheme(mosaic_scheme)
     parts = [",".join(bands), mosaic_scheme, collection, declaration_module.digest(declaration)]
     selection = _canonicalize_properties_filter(properties_filter)
     if selection:
@@ -146,13 +149,14 @@ def params_key(
 
 
 def window_folder_segment(
-    startdate: datetime.datetime, enddate: datetime.datetime, mosaic_days: int, *,
+    startdate: datetime.datetime, enddate: datetime.datetime, mosaic_days: int | str, *,
     bands: list[str], mosaic_scheme: str, collection: str, declaration: CollectionDeclaration,
     properties_filter: Mapping[str, str | Sequence[str]] | None = None,
     processing: str | None = None,
 ) -> str:
     """The one run-folder segment shared by every cell of a request:
-    `<startdate>_<enddate>_m<mosaic_days>_<params_key>`.
+    `<collection code>_<startdate>-<enddate>_<period>_<params_key>`, e.g.
+    `s2l2a_20180101-20190101_P1M_ab12cd34` (`P1M` for `"month"`, `P<n>D` for an `int`).
 
     Callers that need to name an expected cube path WITHOUT running `setup` call this with
     the same arguments `setup` was given -- same inputs, same string, no catalog access.
@@ -161,7 +165,13 @@ def window_folder_segment(
     enddate = pd.to_datetime(enddate, utc=True)
     key = params_key(bands, mosaic_scheme, collection=collection, declaration=declaration,
                      properties_filter=properties_filter, processing=processing)
-    return f"{startdate.strftime('%Y%m%d')}_{enddate.strftime('%Y%m%d')}_m{mosaic_days}_{key}"
+    mosaic_days = ops.check_mosaic_days(mosaic_days, startdate)
+    period = "P1M" if mosaic_days == ops.MONTH else f"P{mosaic_days}D"
+    # The readable dates drop the time of day, so the hash also covers the full window.
+    key = hashlib.sha1(f"{key}|{startdate.isoformat()}|{enddate.isoformat()}|{mosaic_days}".encode()
+                       ).hexdigest()[:8]
+    return (f"{_collections.short_name_of(collection)}_{startdate.strftime('%Y%m%d')}-"
+            f"{enddate.strftime('%Y%m%d')}_{period}_{key}")
 
 
 def cube_export_folderpath(run_folderpath: str, window_segment: str, id_value) -> str:
@@ -199,7 +209,7 @@ def _refuse_duplicate_ids(shapes_gdf: gpd.GeoDataFrame, id_col: str) -> None:
 
 
 def _append_input_rows(
-    rows: list[dict], csv_filepath: str, *, mosaic_days: int, mosaic_scheme: str,
+    rows: list[dict], csv_filepath: str, *, mosaic_days: int | str, mosaic_scheme: str,
     collection: str, bands: list[str],
     properties_filter: Mapping[str, str | Sequence[str]] | None, processing: str | None,
 ) -> None:
@@ -231,7 +241,7 @@ def setup(
     startdate: datetime.datetime,
     enddate: datetime.datetime,
     bands: list[str],
-    mosaic_days: int,
+    mosaic_days: int | str,
     csv_filepath: str,
     label_col: str | None,
     mosaic_scheme: str = config.MOSAIC_SCHEME,
@@ -283,8 +293,10 @@ def setup(
 
     Spec: 58 D9, D13; 59 D6.
     """
+    ops.check_mosaic_scheme(mosaic_scheme)
     startdate = pd.to_datetime(startdate, utc=True)
     enddate = pd.to_datetime(enddate, utc=True)
+    mosaic_days = ops.check_mosaic_days(mosaic_days, startdate)
     declaration = _collections.get(collection)
     # Canonicalize bands to native asset keys as early as possible: every
     # downstream use of `bands` -- the digest, `input.csv`, the builder's catalog-band
@@ -338,6 +350,16 @@ def setup(
     )
     fs.write_text(declaration_filepath,
                   json.dumps(declaration_module.to_json(written)))
+    fs.write_text(os.path.join(run_folderpath, window_segment, PARAMS_FILENAME), json.dumps({
+        "collection": collection, "bands": bands, "startdate": str(startdate),
+        "enddate": str(enddate), "mosaic_days": mosaic_days, "mosaic_scheme": mosaic_scheme,
+        "properties_filter": {
+            k: sorted(properties_filter_values(properties_filter[k]))
+            for k in sorted(properties_filter or {})
+        },
+        "processing": processing,
+        "declaration": declaration_module.to_json(declaration),
+    }, indent=2))
 
     n_shapes = len(shapes_gdf)
     print(f"[setup] catalog read once: {len(catalog_gdf)} rows, for {n_shapes} shapes",
@@ -593,7 +615,7 @@ def _presence_for_paths(datacube_filepaths, *, label: str) -> dict[str, bool]:
 
 
 def _row_matches_window(
-    row, *, bands: list[str], mosaic_days: int, startdate, enddate,
+    row, *, bands: list[str], mosaic_days: int | str, startdate, enddate,
     mosaic_scheme: str, collection: str,
     properties_filter: Mapping[str, str | Sequence[str]] | None = None,
     processing: str | None = None,
@@ -759,7 +781,7 @@ def _current_rows(
 def build_shortfall_only(
     *, catalog_filepath: str, timestamp_col: str, shapefilepath: str, id_col: str,
     run_folderpath: str, startdate, enddate, bands: list[str],
-    mosaic_days: int, csv_filepath: str,
+    mosaic_days: int | str, csv_filepath: str,
     label_col: str | None, mosaic_scheme: str = config.MOSAIC_SCHEME,
     max_concurrent: int = config.SETUP_MAX_CONCURRENT,
     collection: str = config.SATELLITE_S2L2A,
@@ -959,7 +981,7 @@ def run_create_datacube(
     startdate: datetime.datetime,
     enddate: datetime.datetime,
     bands: list[str],
-    mosaic_days: int,
+    mosaic_days: int | str,
     csv_filepath: str,
     label_col: str | None,
     cores: int,
@@ -993,6 +1015,8 @@ def run_create_datacube(
     catalog access) is missing and not already known-empty. Removing the flag entirely is
     blocked on #84.
     """
+    ops.check_mosaic_scheme(mosaic_scheme)
+    ops.check_mosaic_days(mosaic_days, startdate)
     bands = [_collections.get(collection).canonical_to_native(b) for b in bands]
     if overwrite_setup_csv:
         if fs.exists(csv_filepath):

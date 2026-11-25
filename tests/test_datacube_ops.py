@@ -50,21 +50,6 @@ def test_median_mosaic_calendar_default_labels_by_window_start():
     assert md2["previous_timestamps"] == ts
 
 
-def test_median_mosaic_acquisition_legacy_labels_by_first_acquisition():
-    ts = [_ts(1), _ts(6), _ts(26)]
-    dc = np.array([10, 0, 30], dtype=np.int32).reshape(3, 1, 1, 1)
-    md = {"bands": ["B04"], "timestamps": ts}
-    out, md2 = ops.median_mosaic(
-        dc, md, startdate=datetime.datetime(2018, 1, 1),
-        enddate=datetime.datetime(2018, 2, 1), mosaic_days=20, mask_value=0,
-        mosaic_scheme="acquisition",
-    )
-    assert out.shape == (2, 1, 1, 1)
-    assert out[0, 0, 0, 0] == 10 and out[1, 0, 0, 0] == 30
-    assert md2["timestamps"] == [ts[0], ts[2]]       # first ts of each bucket (legacy)
-    assert md2["mosaic_index_intervals"] == [(0, 1), (2, 2)]
-
-
 def test_median_mosaic_calendar_cross_shape_identical_timestamps():
     """Two cubes with *different* acquisition dates but the same window inputs get an
     identical timestamps axis — the property flatten (spec 05) relies on."""
@@ -114,27 +99,22 @@ def test_median_mosaic_noop_when_days_lt_1():
     assert out is dc and md2 is md
 
 
-def test_mosaic_ranges_validation():
-    ts = [_ts(5), _ts(10)]
+def test_calendar_windows_validation():
     with pytest.raises(ValueError, match="startdate must be"):
-        ops._get_mosaic_ts_index_ranges(ts, datetime.datetime(2018, 1, 8),
-                                        datetime.datetime(2018, 2, 1), 20)
+        ops._calendar_windows([_ts(5), _ts(10)], datetime.datetime(2018, 1, 8),
+                              datetime.datetime(2018, 2, 1), 20)
     with pytest.raises(ValueError, match="not sorted"):
-        ops._get_mosaic_ts_index_ranges([_ts(10), _ts(5)],
-                                        datetime.datetime(2018, 1, 1),
-                                        datetime.datetime(2018, 2, 1), 20)
-    # calendar path shares the same guards
-    with pytest.raises(ValueError, match="startdate must be"):
-        ops._calendar_windows([_ts(5)], datetime.datetime(2018, 1, 8),
+        ops._calendar_windows([_ts(10), _ts(5)], datetime.datetime(2018, 1, 1),
                               datetime.datetime(2018, 2, 1), 20)
 
 
-def test_median_mosaic_rejects_unknown_scheme():
+@pytest.mark.parametrize("scheme", ["acquisition", "nope"])
+def test_median_mosaic_accepts_only_calendar(scheme):
     md = {"bands": ["B04"], "timestamps": [_ts(1), _ts(2)]}
-    with pytest.raises(ValueError, match="mosaic_scheme must be one of"):
+    with pytest.raises(ValueError, match='only "calendar"'):
         ops.median_mosaic(np.ones((2, 1, 1, 1), dtype=np.int32), md,
                           startdate=datetime.datetime(2018, 1, 1),
-                          enddate=datetime.datetime(2018, 2, 1), mosaic_scheme="nope")
+                          enddate=datetime.datetime(2018, 2, 1), mosaic_scheme=scheme)
 
 
 def test_run_ops_threads_sequence():

@@ -106,8 +106,9 @@ arrays = training.load()   # {"data", "ids", "labels", "coords", "metadata"}
 
 For each labelled polygon, rise-eo builds a datacube and flattens the cubes into one array:
 - **cloud-masked** with the Sentinel-2 scene classification (SCL);
-- **mosaicked** into calendar intervals of `mosaic_days` (median), so every cube in a run has the same
-  time axis;
+- **mosaicked** into calendar intervals (median): `mosaic_days=20` for 20-day windows, or
+  `mosaic_days="month"` for calendar months (`startdate` then starts on the 1st of a month). Every cube in
+  a run has the same time axis;
 - **merged across MGRS tiles**, after moving them all into one CRS, and resampled to a real 10 m band.
 
 Pass your adapter (`adapter=`) to compute its features here; inference later computes the exact same

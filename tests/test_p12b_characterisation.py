@@ -247,10 +247,7 @@ def _day(n):
 
 _START = datetime.datetime(2018, 1, 1)
 _END = datetime.datetime(2018, 4, 1)
-_BOTH = [
-    pytest.param(ops._get_mosaic_ts_index_ranges, id="legacy"),
-    pytest.param(ops._calendar_windows, id="calendar"),
-]
+_BOTH = [pytest.param(ops._calendar_windows, id="calendar")]
 
 
 @pytest.mark.parametrize("func", _BOTH)
@@ -280,12 +277,8 @@ def test_b14_guard_order(func):
     assert str(exc.value) == "startdate must be before or on the first timestamp"
 
 
-def test_b14_legacy_gap_opens_one_interval_per_step():
-    # day 2, then a gap of two whole windows, then days 64 and 65: the legacy bucketing
-    # advances ONE bucket per out-of-window timestamp, so day 65 opens a third interval
-    # even though it shares a calendar window with day 64.
+def test_b14_gap_windows_are_emitted_empty():
     ts = [_day(2), _day(64), _day(65)]
-    assert ops._get_mosaic_ts_index_ranges(ts, _START, _END, 20) == [(0, 0), (1, 1), (2, 2)]
     labels, intervals = ops._calendar_windows(ts, _START, _END, 20)
     assert labels == [_day(1), _day(21), _day(41), _day(61), _day(81)]
     assert intervals == [(0, 0), None, None, (1, 2), None]
@@ -293,7 +286,6 @@ def test_b14_legacy_gap_opens_one_interval_per_step():
 
 def test_b14_timestamp_on_a_window_boundary():
     ts = [_day(2), _day(21)]  # day 21 == startdate + 20 days
-    assert ops._get_mosaic_ts_index_ranges(ts, _START, _END, 20) == [(0, 1)]
     labels, intervals = ops._calendar_windows(ts, _START, _END, 20)
     assert labels == [_day(1), _day(21), _day(41), _day(61), _day(81)]
     assert intervals == [(0, 0), (1, 1), None, None, None]
@@ -302,7 +294,6 @@ def test_b14_timestamp_on_a_window_boundary():
 def test_b14_timestamp_exactly_at_enddate():
     end = datetime.datetime(2018, 2, 10)  # day 41, the end of the second window
     ts = [_day(2), _day(41)]
-    assert ops._get_mosaic_ts_index_ranges(ts, _START, end, 20) == [(0, 0), (1, 1)]
     labels, intervals = ops._calendar_windows(ts, _START, end, 20)
     assert labels == [_day(1), _day(21)]
     assert intervals == [(0, 0), (1, 1)]

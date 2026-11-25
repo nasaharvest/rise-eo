@@ -654,3 +654,26 @@ def test_roi_preflight_alias_spelling_is_not_a_missing_band(tmp_path, required, 
         "preflight failed:\n"
         "  - startdate/enddate/mosaic_days give T=1 but the model needs T=2."
     )
+
+
+@pytest.mark.parametrize("n_timestamps", [2, None])
+@pytest.mark.parametrize("days, start, match", [
+    ("week", datetime.datetime(2018, 6, 1), 'int or "month"'),
+    ("month", datetime.datetime(2018, 6, 15), "1st of a month"),
+])
+def test_roi_preflight_rejects_a_bad_mosaic_days_before_any_file_is_written(
+    tmp_path, n_timestamps, days, start, match,
+):
+    class _Model(_Tiny):
+        pass
+
+    _Model.n_timestamps = n_timestamps
+    out = tmp_path / "out"
+    with pytest.raises(rise_eo.PreflightError, match=match):
+        rise_eo.run_inference(
+            _Model(), output_folderpath=str(out), roi=ROI,
+            catalog_filepath="sentinel-2-l2a/c.parquet",
+            startdate=start, enddate=datetime.datetime(2018, 9, 1),
+            mosaic_days=days, bands=["B04", "B08"],
+        )
+    assert not out.exists() or not any(out.iterdir())

@@ -38,7 +38,7 @@ def run_task(
     export_folderpath: str,
     *,
     bands: list[str],
-    mosaic_days: int,
+    mosaic_days: int | str,
     declaration_filepath: str,
     mosaic_scheme: str = config.MOSAIC_SCHEME,
     if_missing_files: str | None = "warn",
@@ -73,6 +73,8 @@ def run_task(
 
     Spec: 58 D13, D14.
     """
+    ops.check_mosaic_scheme(mosaic_scheme)
+    ops.check_mosaic_days(mosaic_days, startdate)
     if fs.exists(os.path.join(export_folderpath, "datacube.npy")):
         return
 
@@ -115,9 +117,9 @@ def _parse_args(argv=None) -> argparse.Namespace:
     p.add_argument("enddate", help="calendar-window end")
     p.add_argument("export_folderpath", help="where datacube.npy + metadata go")
     p.add_argument("--bands", required=True, help="comma-separated, e.g. B04,B08,B8A,SCL")
-    p.add_argument("--mosaic-days", type=int, default=config.MOSAIC_DAYS)
-    p.add_argument("--mosaic-scheme", default=config.MOSAIC_SCHEME,
-                   choices=list(ops.MOSAIC_SCHEMES))
+    p.add_argument("--mosaic-days", type=ops.parse_mosaic_days, default=config.MOSAIC_DAYS,
+                   help='days per window, or "month"')
+    p.add_argument("--mosaic-scheme", default=config.MOSAIC_SCHEME)
     p.add_argument("--declaration-filepath", required=True,
                    help="control file written by setup(): the resolved "
                         "CollectionDeclaration as JSON (spec 58 D13)")
