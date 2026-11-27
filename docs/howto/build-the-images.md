@@ -91,6 +91,13 @@ moves one. Shared aliases (`current`, `champion`, `demo-*`) are the maintainer's
 or none at all and uses `result.ref` / `result.registry_ref` directly. The maintainer promotes with
 the same call plus `alias="current"`; that works on a reuse as well as on a build.
 
+**Test runs use test names.** A run-book or other test run builds under `rise-eo-aml-env-test`
+and `rise-eo-infer-sklearn-test`, from a git ref pinned to a full sha, with no alias. The formal
+names gain a version only at a release. The registry looks images up by name and digest, and the
+name is not part of the digest, so a test name has its own versions: re-running a commit under it
+reuses the image. [`runbooks/build-test-images.ipynb`](../../runbooks/build-test-images.ipynb) does
+this for one commit and prints the `AZ_ENV` value other run-books need.
+
 In order (D4):
 
 1. resolve the definition -- every moving reference fixed: a git ref pinned to a 40-char sha, a
